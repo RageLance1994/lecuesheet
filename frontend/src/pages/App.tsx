@@ -3,7 +3,6 @@ import { io } from "socket.io-client";
 import { CueTable } from "../components/CueTable";
 import type { CueColumnKey } from "../components/CueTable";
 import { CuesheetTimeline } from "../components/CuesheetTimeline";
-import { MatchPlannerModal } from "../components/MatchPlannerModal";
 import {
   EventFormModal,
   type EventDraft,
@@ -12,8 +11,8 @@ import {
 } from "../components/EventFormModal";
 import { HardConfirmModal } from "../components/HardConfirmModal";
 import { api } from "../lib/api";
-import type { CueEvent, CueSheetSnapshot, MatchInfoDraft } from "../lib/api";
-import { emptyMatchInfo, matchInfoToDraft } from "../lib/api";
+import type { Activation, CueEvent, CueSheetSnapshot, Venue } from "../lib/api";
+import { matchInfoToDraft } from "../lib/api";
 import { Button } from "../components/ui/Button";
 import {
   Card,
@@ -34,6 +33,11 @@ type EditorState = {
   open: boolean;
   mode: "create" | "edit";
   eventId: string | null;
+};
+
+type Props = {
+  eventId: string;
+  onNavigate: (path: string) => void;
 };
 
 const initialConfirm: ConfirmState = {
@@ -58,6 +62,44 @@ function getTeamInitials(name: string, fallback: string) {
   return initials.slice(0, 2) || fallback;
 }
 
+function TeamLogoImage({
+  src,
+  className,
+  alt = "",
+  outlierRatio = 1.15,
+}: {
+  src: string;
+  className: string;
+  alt?: string;
+  outlierRatio?: number;
+}) {
+  const [ratioOutlier, setRatioOutlier] = useState(false);
+  useEffect(() => {
+    setRatioOutlier(false);
+  }, [src]);
+
+  return (
+    <img
+      className={`${className}${ratioOutlier ? " is-ratio-outlier" : ""}`}
+      src={src}
+      alt={alt}
+      onLoad={(event) => {
+        const image = event.currentTarget;
+        const { naturalWidth, naturalHeight } = image;
+        if (!naturalWidth || !naturalHeight) {
+          setRatioOutlier(false);
+          return;
+        }
+
+        const ratio = naturalWidth / naturalHeight;
+        const ratioFloor = 1 / outlierRatio;
+        setRatioOutlier(ratio >= outlierRatio || ratio <= ratioFloor);
+      }}
+      onError={() => setRatioOutlier(false)}
+    />
+  );
+}
+
 function MatchTeamRow({
   label,
   name,
@@ -78,7 +120,7 @@ function MatchTeamRow({
       <div className="match-info-team-row__label">{label}</div>
       <div className="match-info-team-row__avatar">
         {logoUrl.trim() ? (
-          <img className="match-info-team-row__img" src={logoUrl} alt="" />
+          <TeamLogoImage className="match-info-team-row__img" src={logoUrl} alt="" />
         ) : (
           <span>{getTeamInitials(name, label)}</span>
         )}
@@ -112,7 +154,7 @@ function MatchMiniLogo({
   return (
     <div className="match-info-mini-logo" title={name.trim() || fallback}>
       {logoUrl.trim() ? (
-        <img src={logoUrl} alt="" />
+        <TeamLogoImage className="match-info-mini-logo__img" src={logoUrl} alt="" />
       ) : (
         <span>{getTeamInitials(name, fallback)}</span>
       )}
@@ -130,7 +172,7 @@ function moveByIds(events: CueEvent[], draggedId: string, targetId: string) {
   return next;
 }
 
-export function App() {
+export function App({ eventId, onNavigate }: Props) {
   const [snapshot, setSnapshot] = useState<CueSheetSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>("");
@@ -142,12 +184,12 @@ export function App() {
   });
   const [confirm, setConfirm] = useState<ConfirmState>(initialConfirm);
   const [matchInfoOpen, setMatchInfoOpen] = useState(true);
-  const [matchPlannerOpen, setMatchPlannerOpen] = useState(false);
-  const [matchPlannerDraft, setMatchPlannerDraft] = useState<MatchInfoDraft>(emptyMatchInfo());
   const [menuOpen, setMenuOpen] = useState(false);
   const [versionLogModalOpen, setVersionLogModalOpen] = useState(false);
   const [selectedTimelineEventId, setSelectedTimelineEventId] = useState<string | null>(null);
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
+  const [activationOptions, setActivationOptions] = useState<Activation[]>([]);
+  const [venues, setVenues] = useState<Venue[]>([]);
   const versionMenuRef = useRef<HTMLDivElement | null>(null);
   const tableMenuRef = useRef<HTMLDivElement | null>(null);
   const [visibleColumns, setVisibleColumns] = useState<Record<CueColumnKey, boolean>>({
@@ -182,20 +224,47 @@ export function App() {
 
   useEffect(() => {
     let active = true;
+    setError("");
+
     api
-      .getCueSheet()
+      .getCueSheet(eventId)
       .then((data) => {
         if (active) setSnapshot(data);
       })
-      .catch((err) => setError(err.message));
+      .catch((err) => {
+        if (active) {
+          setError(err.message);
+          setSnapshot(null);
+        }
+      });
 
     const socket = io();
-    socket.on("cuesheet:updated", (data: CueSheetSnapshot) => {
-      setSnapshot(data);
+    socket.on("cuesheet:updated", (payload: { eventId: string; snapshot: CueSheetSnapshot }) => {
+      if (payload?.eventId === eventId && payload?.snapshot) {
+        setSnapshot(payload.snapshot);
+      }
     });
+
     return () => {
       active = false;
       socket.close();
+    };
+  }, [eventId]);
+
+  useEffect(() => {
+    let active = true;
+    api.getActivations().then((rows) => {
+      if (active) setActivationOptions(rows);
+    }).catch(() => {
+      if (active) setActivationOptions([]);
+    });
+    api.getVenues().then((rows) => {
+      if (active) setVenues(rows);
+    }).catch(() => {
+      if (active) setVenues([]);
+    });
+    return () => {
+      active = false;
     };
   }, []);
 
@@ -211,6 +280,10 @@ export function App() {
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
+
+  useEffect(() => {
+    setSelectedTimelineEventId(null);
+  }, [eventId]);
 
   useEffect(() => {
     if (selectedTimelineEventId) return;
@@ -255,16 +328,6 @@ export function App() {
     setEditor({ open: true, mode: "create", eventId: null });
   }
 
-  function openMatchPlanner() {
-    setMatchPlannerDraft(matchInfoToDraft(snapshot?.metadata?.match));
-    setMatchPlannerOpen(true);
-  }
-
-  function closeMatchPlanner() {
-    if (busy) return;
-    setMatchPlannerOpen(false);
-  }
-
   function openEditModal(event: CueEvent) {
     setDraft(draftFromEvent(event));
     setEditor({ open: true, mode: "edit", eventId: event.id });
@@ -278,7 +341,7 @@ export function App() {
         "Create",
         async () => {
           await run(async () => {
-            setSnapshot(await api.addEvent(draft));
+            setSnapshot(await api.addRow(eventId, draft));
             setEditor({ open: false, mode: "create", eventId: null });
             setDraft(emptyDraft);
           });
@@ -289,14 +352,14 @@ export function App() {
     }
 
     if (!editor.eventId) return;
-    const eventId = editor.eventId;
+    const rowId = editor.eventId;
     requestConfirm(
       "Update Cue Event",
       "Conferma modifica record.",
       "Save",
       async () => {
         await run(async () => {
-          setSnapshot(await api.updateEvent(eventId, draft));
+          setSnapshot(await api.updateRow(eventId, rowId, draft));
           setEditor({ open: false, mode: "create", eventId: null });
           setDraft(emptyDraft);
         });
@@ -305,15 +368,15 @@ export function App() {
     );
   }
 
-  function submitMatchInfo() {
-    void run(async () => {
-      const nextSnapshot = await api.saveMatchInfo(matchPlannerDraft);
-      setSnapshot(nextSnapshot);
-      setMatchPlannerOpen(false);
-    });
-  }
-
   const matchInfo = matchInfoToDraft(snapshot?.metadata?.match);
+  const selectedVenue =
+    venues.find((venue) => venue.id === matchInfo.venueId) ??
+    venues.find((venue) => venue.name === matchInfo.venue);
+  const screenOptions = (selectedVenue?.tech?.screens ?? []).map((screen, index) => ({
+    id: screen.id,
+    label: `${screen.type.replaceAll("_", " ")} ${index + 1}`,
+    type: screen.type,
+  }));
 
   return (
     <div className="page-shell">
@@ -326,9 +389,17 @@ export function App() {
           />
         </div>
         <nav className="sidebar-nav">
-          <button className="sidebar-nav__item is-active">
-            <i className="fa-solid fa-table-list" />
-            <span>Dashboard</span>
+          <button className="sidebar-nav__item is-active" onClick={() => onNavigate("/events")}>
+            <i className="fa-solid fa-calendar-days" />
+            <span>Events</span>
+          </button>
+          <button className="sidebar-nav__item" onClick={() => onNavigate("/activations")}>
+            <i className="fa-solid fa-clapperboard" />
+            <span>Activations</span>
+          </button>
+          <button className="sidebar-nav__item" onClick={() => onNavigate("/venues")}>
+            <i className="fa-solid fa-location-dot" />
+            <span>Venues</span>
           </button>
         </nav>
       </aside>
@@ -369,16 +440,6 @@ export function App() {
               </div>
             </div>
             <div className="match-info-header-right" ref={versionMenuRef}>
-              <Button
-                variant="outline"
-                size="sm"
-                className="planner-trigger"
-                title="Open planner wizard"
-                onClick={openMatchPlanner}
-              >
-                <i className="fa-solid fa-sliders" />
-                <span className="planner-trigger__label">Planner / Wizard</span>
-              </Button>
               <Button
                 variant="ghost"
                 size="icon"
@@ -486,7 +547,7 @@ export function App() {
                           "Sostituisce l'attuale cuesheet con import da file xlsx di contesto.",
                           "Import",
                           async () => {
-                            await run(async () => setSnapshot(await api.importDefault()));
+                            await run(async () => setSnapshot(await api.importDefault(eventId)));
                             setConfirm(initialConfirm);
                           },
                         );
@@ -512,7 +573,7 @@ export function App() {
                             "Upload",
                             async () => {
                               await run(async () => {
-                                setSnapshot(await api.importXlsx(file));
+                                setSnapshot(await api.importXlsx(eventId, file));
                               });
                               setConfirm(initialConfirm);
                             },
@@ -555,18 +616,16 @@ export function App() {
                 onDelete={(event) =>
                   requestConfirm(
                     "Delete Cue Event",
-                    `Eliminare definitivamente "${event.cue || event.id}"?`,
+                    `Eliminare definitivamente \"${event.cue || event.id}\"?`,
                     "Delete",
                     async () => {
-                      await run(async () => setSnapshot(await api.deleteEvent(event.id)));
+                      await run(async () => setSnapshot(await api.deleteRow(eventId, event.id)));
                       setConfirm(initialConfirm);
                     },
                   )
                 }
                 onReorder={(draggedId, targetId) => {
-                  const ordered = [...(snapshot?.events ?? [])].sort(
-                    (a, b) => a.rowOrder - b.rowOrder,
-                  );
+                  const ordered = [...(snapshot?.events ?? [])].sort((a, b) => a.rowOrder - b.rowOrder);
                   const nextOrdered = moveByIds(ordered, draggedId, targetId);
                   requestConfirm(
                     "Reorder CueSheet",
@@ -574,7 +633,7 @@ export function App() {
                     "Apply",
                     async () => {
                       await run(async () =>
-                        setSnapshot(await api.reorderEvents(nextOrdered.map((event) => event.id))),
+                        setSnapshot(await api.reorderRows(eventId, nextOrdered.map((event) => event.id))),
                       );
                       setConfirm(initialConfirm);
                     },
@@ -590,26 +649,26 @@ export function App() {
           </CardContent>
         </Card>
 
-        {error ? <p className="error">{error}</p> : null}
+        {error ? (
+          <p className="error">
+            {error}
+            <button type="button" className="link-button" onClick={() => onNavigate("/events")}>
+              Back to events
+            </button>
+          </p>
+        ) : null}
       </main>
 
       <EventFormModal
         open={editor.open}
         title={editor.mode === "create" ? "Insert Cue Record" : "Edit Cue Record"}
         draft={draft}
+        activationOptions={activationOptions}
+        screenOptions={screenOptions}
         onChange={setDraft}
         onClose={() => setEditor({ open: false, mode: "create", eventId: null })}
         onSubmit={submitEditor}
         submitLabel={editor.mode === "create" ? "Create" : "Save"}
-        busy={busy}
-      />
-
-      <MatchPlannerModal
-        open={matchPlannerOpen}
-        draft={matchPlannerDraft}
-        onChange={setMatchPlannerDraft}
-        onClose={closeMatchPlanner}
-        onSubmit={submitMatchInfo}
         busy={busy}
       />
 
@@ -627,8 +686,8 @@ export function App() {
       />
 
       {versionLogModalOpen ? (
-        <div className="modal-overlay">
-          <Card className="modal modal-log">
+        <div className="modal-overlay" onMouseDown={() => setVersionLogModalOpen(false)}>
+          <Card className="modal modal-log" onMouseDown={(event) => event.stopPropagation()}>
             <CardHeader className="modal-log__header">
               <div>
                 <CardTitle>Version Log</CardTitle>
@@ -659,4 +718,3 @@ export function App() {
     </div>
   );
 }
-

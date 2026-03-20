@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "./ui/Button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/Card";
-import type { MatchInfoDraft } from "../lib/api";
+import type { MatchInfoDraft, Venue } from "../lib/api";
+import { UnsavedChangesModal } from "./UnsavedChangesModal";
 
 type Props = {
   open: boolean;
   draft: MatchInfoDraft;
+  venueOptions?: Venue[];
   onChange: (next: MatchInfoDraft) => void;
   onClose: () => void;
   onSubmit: () => void;
@@ -52,15 +54,22 @@ function TeamAvatar({ name, logoUrl }: { name: string; logoUrl: string }) {
 export function MatchPlannerModal({
   open,
   draft,
+  venueOptions = [],
   onChange,
   onClose,
   onSubmit,
   busy,
 }: Props) {
   const [step, setStep] = useState(0);
+  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+  const [initialDraftJson, setInitialDraftJson] = useState("");
 
   useEffect(() => {
-    if (open) setStep(0);
+    if (open) {
+      setStep(0);
+      setInitialDraftJson(JSON.stringify(draft));
+      setConfirmCloseOpen(false);
+    }
   }, [open]);
 
   if (!open) return null;
@@ -72,6 +81,21 @@ export function MatchPlannerModal({
     onChange({ ...draft, [key]: value });
   }
 
+  function selectVenue(venueId: string) {
+    if (!venueId) {
+      onChange({ ...draft, venueId: "" });
+      return;
+    }
+    const venue = venueOptions.find((item) => item.id === venueId);
+    if (!venue) return;
+    onChange({
+      ...draft,
+      venueId: venue.id,
+      venue: venue.name || "",
+      city: venue.city || draft.city,
+    });
+  }
+
   function advance() {
     if (isLastStep) {
       onSubmit();
@@ -80,15 +104,27 @@ export function MatchPlannerModal({
     setStep((next) => Math.min(next + 1, STEPS.length - 1));
   }
 
+  const hasUnsavedChanges = JSON.stringify(draft) !== initialDraftJson;
+
+  function requestClose() {
+    if (busy) return;
+    if (hasUnsavedChanges) {
+      setConfirmCloseOpen(true);
+      return;
+    }
+    onClose();
+  }
+
   return (
-    <div className="modal-overlay">
-      <Card className="modal modal-planner">
+    <>
+    <div className="modal-overlay" onMouseDown={requestClose}>
+      <Card className="modal modal-planner" onMouseDown={(event) => event.stopPropagation()}>
         <CardHeader className="planner-modal__header">
           <div>
             <CardTitle>Planner / Wizard</CardTitle>
             <CardDescription>{currentStep.description}</CardDescription>
           </div>
-          <Button variant="ghost" size="icon" title="Close planner" onClick={onClose} disabled={busy}>
+          <Button variant="ghost" size="icon" title="Close planner" onClick={requestClose} disabled={busy}>
             <i className="fa-solid fa-xmark" />
           </Button>
         </CardHeader>
@@ -128,6 +164,21 @@ export function MatchPlannerModal({
               <section className="planner-panel">
                 {currentStep.key === "match" ? (
                   <div className="planner-fields">
+                    <label className="field planner-field--wide">
+                      <span>Venue record</span>
+                      <select
+                        value={draft.venueId || ""}
+                        onChange={(event) => selectVenue(event.target.value)}
+                        disabled={busy || venueOptions.length === 0}
+                      >
+                        <option value="">Select a venue</option>
+                        {venueOptions.map((venue) => (
+                          <option key={venue.id} value={venue.id}>
+                            {venue.name} {venue.city ? `(${venue.city})` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <label className="field">
                       <span>Match ID</span>
                       <input
@@ -328,7 +379,7 @@ export function MatchPlannerModal({
             </div>
 
             <div className="modal-actions planner-modal__actions">
-              <Button variant="outline" onClick={onClose} disabled={busy}>
+              <Button variant="outline" onClick={requestClose} disabled={busy}>
                 <i className="fa-solid fa-xmark" />
                 <span>Cancel</span>
               </Button>
@@ -351,6 +402,16 @@ export function MatchPlannerModal({
         </CardContent>
       </Card>
     </div>
+    <UnsavedChangesModal
+      open={confirmCloseOpen}
+      busy={busy}
+      onCancel={() => setConfirmCloseOpen(false)}
+      onConfirm={() => {
+        setConfirmCloseOpen(false);
+        onClose();
+      }}
+    />
+    </>
   );
 }
 

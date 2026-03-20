@@ -69,6 +69,7 @@ export function CueTable({
   const [now, setNow] = useState(() => new Date());
   const [flashEventId, setFlashEventId] = useState<string | null>(null);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -237,6 +238,9 @@ export function CueTable({
                     setDraggedId(null);
                     setOverId(null);
                   }}
+                  onDoubleClick={() =>
+                    setExpandedRowId((current) => (current === event.id ? null : event.id))
+                  }
                 >
                   {activeColumns.map((column) => {
                     switch (column.key) {
@@ -314,6 +318,25 @@ export function CueTable({
                     }
                   })}
                 </TableRow>
+                {expandedRowId === event.id ? (
+                  <TableRow className="cue-row-expanded" style={rowStyle}>
+                    <TableCell colSpan={activeColumns.length}>
+                      <div className="cue-row-expanded__content">
+                        <strong>Script</strong>
+                        <p>{event.script || "-"}</p>
+                        {event.screenTargets?.length ? (
+                          <div className="cue-row-expanded__targets">
+                            {event.screenTargets.map((target) => (
+                              <span key={target.screenId}>
+                                {target.screenLabel}: {target.value || "-"}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : null}
               </Fragment>
             );
           })}

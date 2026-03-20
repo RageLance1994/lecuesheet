@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
-const DATA_DIR = path.resolve(process.cwd(), "data");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, "..", "data");
 const DATA_FILE = path.join(DATA_DIR, "cuesheet.json");
 
 function createDefaultMatchTeam() {
@@ -18,6 +21,7 @@ function createDefaultMatchInfo() {
     matchId: null,
     teamA: createDefaultMatchTeam(),
     teamB: createDefaultMatchTeam(),
+    venueId: null,
     city: null,
     date: null,
     gatesOpen: null,
@@ -36,16 +40,18 @@ export const PHASES = [
 
 const PHASE_ORDER = PHASES.map((phase) => phase.key);
 
+const DEFAULT_METADATA = {
+  name: "Live Engine Cue Sheet",
+  sourceFile: null,
+  importedAt: null,
+  updatedAt: null,
+  match: createDefaultMatchInfo(),
+};
+
 const DEFAULT_STATE = {
-  metadata: {
-    name: "Live Engine Cue Sheet",
-    sourceFile: null,
-    importedAt: null,
-    updatedAt: null,
-    match: createDefaultMatchInfo(),
-  },
   events: [],
-  versions: [],
+  venues: [],
+  activations: [],
 };
 
 function ensureStorage() {
@@ -53,6 +59,10 @@ function ensureStorage() {
   if (!fs.existsSync(DATA_FILE)) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(DEFAULT_STATE, null, 2), "utf-8");
   }
+}
+
+function nowIso() {
+  return new Date().toISOString();
 }
 
 function sanitizeText(value) {
@@ -80,6 +90,7 @@ function normalizeMatchInfo(match) {
     matchId: sanitizeOptionalText(source.matchId),
     teamA: normalizeMatchTeam(source.teamA),
     teamB: normalizeMatchTeam(source.teamB),
+    venueId: sanitizeOptionalText(source.venueId),
     city: sanitizeOptionalText(source.city),
     date: sanitizeOptionalText(source.date),
     gatesOpen: sanitizeOptionalText(source.gatesOpen),
@@ -91,9 +102,111 @@ function normalizeMatchInfo(match) {
 function normalizeMetadata(metadata) {
   const source = metadata && typeof metadata === "object" ? metadata : {};
   return {
-    ...DEFAULT_STATE.metadata,
+    ...DEFAULT_METADATA,
     ...source,
     match: normalizeMatchInfo(source.match),
+  };
+}
+
+function createDefaultVenueTech() {
+  return {
+    screens: [],
+    speakers: [],
+  };
+}
+
+const ALLOWED_SCREEN_TYPES = new Set(["ribbon", "giant_screen", "fascia"]);
+
+function normalizeReferencePic(referencePic) {
+  const source = referencePic && typeof referencePic === "object" ? referencePic : {};
+  return {
+    name: sanitizeOptionalText(source.name),
+    mime: sanitizeOptionalText(source.mime),
+    data: sanitizeOptionalText(source.data),
+  };
+}
+
+function normalizeScreen(screen) {
+  const source = screen && typeof screen === "object" ? screen : {};
+  const type = sanitizeText(source.type).toLowerCase();
+  const resSource = source.res && typeof source.res === "object" ? source.res : {};
+  const x = Number(resSource.x);
+  const y = Number(resSource.y);
+  const framerate = Number(source.framerate);
+
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    type: ALLOWED_SCREEN_TYPES.has(type) ? type : "giant_screen",
+    res: {
+      x: Number.isFinite(x) && x > 0 ? Math.round(x) : 1920,
+      y: Number.isFinite(y) && y > 0 ? Math.round(y) : 1080,
+    },
+    framerate: Number.isFinite(framerate) && framerate > 0 ? Math.round(framerate) : 60,
+    codec: sanitizeText(source.codec) || ".mov",
+    referencePic: normalizeReferencePic(source.referencePic),
+  };
+}
+
+function normalizeSpeaker(speaker) {
+  const source = speaker && typeof speaker === "object" ? speaker : {};
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    name: sanitizeText(source.name) || "Speaker",
+    zone: sanitizeOptionalText(source.zone),
+    notes: sanitizeOptionalText(source.notes),
+  };
+}
+
+function normalizeVenueTech(tech) {
+  const source = tech && typeof tech === "object" ? tech : {};
+  const legacyAudio = Array.isArray(source.audio) ? source.audio : [];
+  return {
+    screens: Array.isArray(source.screens)
+      ? source.screens.map((item) => normalizeScreen(item))
+      : [],
+    speakers: Array.isArray(source.speakers)
+      ? source.speakers.map((item) => normalizeSpeaker(item))
+      : legacyAudio.map((item) => normalizeSpeaker({ name: sanitizeText(item) || "Speaker" })),
+  };
+}
+
+function normalizeVenue(venue) {
+  const source = venue && typeof venue === "object" ? venue : {};
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    name: sanitizeText(source.name) || "Untitled Venue",
+    city: sanitizeOptionalText(source.city),
+    address: sanitizeOptionalText(source.address),
+    tech: normalizeVenueTech(source.tech ?? createDefaultVenueTech()),
+    createdAt: source.createdAt || nowIso(),
+    updatedAt: source.updatedAt || nowIso(),
+  };
+}
+
+function normalizeActivation(activation) {
+  const source = activation && typeof activation === "object" ? activation : {};
+  const tags = Array.isArray(source.tags)
+    ? source.tags.map((item) => sanitizeText(item)).filter(Boolean)
+    : [];
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    name: sanitizeText(source.name) || "Untitled Activation",
+    fileName: sanitizeOptionalText(source.fileName),
+    mimeType: sanitizeOptionalText(source.mimeType),
+    sizeBytes: Number.isFinite(Number(source.sizeBytes)) ? Number(source.sizeBytes) : null,
+    durationMs: Number.isFinite(Number(source.durationMs)) ? Number(source.durationMs) : null,
+    tags,
+    createdAt: source.createdAt || nowIso(),
+    updatedAt: source.updatedAt || nowIso(),
+  };
+}
+
+function normalizeScreenTarget(item) {
+  const source = item && typeof item === "object" ? item : {};
+  return {
+    screenId: sanitizeText(source.screenId) || randomUUID(),
+    screenLabel: sanitizeText(source.screenLabel) || "Screen",
+    value: sanitizeText(source.value),
   };
 }
 
@@ -123,22 +236,7 @@ function formatSeconds(totalSeconds) {
   return `${h}:${m}:${s}`;
 }
 
-function rebuildTimeline(events) {
-  const counters = new Map(PHASE_ORDER.map((key) => [key, 0]));
-  return events.map((event, index) => {
-    const phase = PHASE_ORDER.includes(event.phase) ? event.phase : phaseFromCue(event.cue);
-    const offset = counters.get(phase) ?? 0;
-    counters.set(phase, offset + 1);
-    return {
-      ...event,
-      phase,
-      rowOrder: index,
-      timecode: formatSeconds(phaseStartSeconds(phase) + offset * 30),
-    };
-  });
-}
-
-function normalizeEvent(event, actor, rowOrder) {
+function normalizeRow(event, actor, rowOrder) {
   const phase = PHASE_ORDER.includes(event.phase) ? event.phase : phaseFromCue(event.cue);
   return {
     id: event.id ?? randomUUID(),
@@ -149,13 +247,125 @@ function normalizeEvent(event, actor, rowOrder) {
     cue: sanitizeText(event.cue),
     asset: sanitizeText(event.asset),
     operator: sanitizeText(event.operator),
+    audio: sanitizeText(event.audio),
+    script: sanitizeText(event.script),
+    activationId: sanitizeOptionalText(event.activationId),
+    screenTargets: Array.isArray(event.screenTargets)
+      ? event.screenTargets.map((item) => normalizeScreenTarget(item))
+      : [],
     status: sanitizeText(event.status) || "pending",
     notes: sanitizeText(event.notes),
     sourceRow: event.sourceRow ?? null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIso(),
     updatedBy: actor || "system",
     raw: event.raw ?? {},
   };
+}
+
+function rebuildTimeline(rows) {
+  const counters = new Map(PHASE_ORDER.map((key) => [key, 0]));
+  return rows.map((row, index) => {
+    const phase = PHASE_ORDER.includes(row.phase) ? row.phase : phaseFromCue(row.cue);
+    const offset = counters.get(phase) ?? 0;
+    counters.set(phase, offset + 1);
+    return {
+      ...row,
+      phase,
+      rowOrder: index,
+      timecode: formatSeconds(phaseStartSeconds(phase) + offset * 30),
+    };
+  });
+}
+
+function pushVersion(record, entry) {
+  const versionEntry = {
+    id: randomUUID(),
+    timestamp: nowIso(),
+    ...entry,
+  };
+  record.versions = [versionEntry, ...(record.versions ?? [])].slice(0, 2000);
+}
+
+function createEventRecord({
+  id,
+  name,
+  metadata,
+  rows,
+  versions,
+  createdAt,
+  updatedAt,
+}) {
+  const safeMetadata = normalizeMetadata(metadata);
+  const normalizedRows = rebuildTimeline(
+    (rows ?? []).map((row, index) => normalizeRow(row, "system", index)),
+  );
+  return {
+    id: id || randomUUID(),
+    name: sanitizeText(name) || safeMetadata.match.matchId || "Untitled Event",
+    createdAt: createdAt || nowIso(),
+    updatedAt: updatedAt || nowIso(),
+    metadata: safeMetadata,
+    rows: normalizedRows,
+    versions: Array.isArray(versions) ? versions : [],
+  };
+}
+
+function normalizeEventRecord(record) {
+  if (!record || typeof record !== "object") {
+    return createEventRecord({});
+  }
+  return createEventRecord({
+    id: record.id,
+    name: record.name,
+    metadata: record.metadata,
+    rows: record.rows,
+    versions: record.versions,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  });
+}
+
+function migrateLegacyState(parsed) {
+  const metadata = normalizeMetadata(parsed?.metadata);
+  const rows = Array.isArray(parsed?.events) ? parsed.events : [];
+  const versions = Array.isArray(parsed?.versions) ? parsed.versions : [];
+  const legacyId = sanitizeText(parsed?.legacyEventId) || "legacy-default-event";
+  const record = createEventRecord({
+    id: legacyId,
+    name: metadata.match.matchId || metadata.name,
+    metadata,
+    rows,
+    versions,
+  });
+  return { events: [record], venues: [], activations: [] };
+}
+
+function normalizeState(parsed) {
+  if (!parsed || typeof parsed !== "object") {
+    return structuredClone(DEFAULT_STATE);
+  }
+
+  if (Array.isArray(parsed.events) && parsed.events.length > 0 && parsed.events[0]?.rows) {
+    return {
+      events: parsed.events.map((eventRecord) => normalizeEventRecord(eventRecord)),
+      venues: Array.isArray(parsed.venues) ? parsed.venues.map((venue) => normalizeVenue(venue)) : [],
+      activations: Array.isArray(parsed.activations)
+        ? parsed.activations.map((activation) => normalizeActivation(activation))
+        : [],
+    };
+  }
+
+  if (Array.isArray(parsed.events) && parsed.events.length === 0 && !parsed.metadata) {
+    return {
+      events: [],
+      venues: Array.isArray(parsed.venues) ? parsed.venues.map((venue) => normalizeVenue(venue)) : [],
+      activations: Array.isArray(parsed.activations)
+        ? parsed.activations.map((activation) => normalizeActivation(activation))
+        : [],
+    };
+  }
+
+  return migrateLegacyState(parsed);
 }
 
 function readState() {
@@ -163,80 +373,233 @@ function readState() {
   const raw = fs.readFileSync(DATA_FILE, "utf-8");
   try {
     const parsed = JSON.parse(raw);
-    return {
-      ...DEFAULT_STATE,
-      ...parsed,
-      metadata: normalizeMetadata(parsed.metadata),
-      events: Array.isArray(parsed.events) ? parsed.events : [],
-      versions: Array.isArray(parsed.versions) ? parsed.versions : [],
-    };
+    return normalizeState(parsed);
   } catch {
     return structuredClone(DEFAULT_STATE);
   }
 }
 
 function writeState(state) {
-  const normalizedState = {
-    ...state,
-    metadata: normalizeMetadata(state.metadata),
-    events: Array.isArray(state.events) ? state.events : [],
-    versions: Array.isArray(state.versions) ? state.versions : [],
-  };
-  const nextState = {
-    ...normalizedState,
-    metadata: {
-      ...normalizedState.metadata,
-      updatedAt: new Date().toISOString(),
+  const normalized = normalizeState(state);
+  fs.writeFileSync(DATA_FILE, JSON.stringify(normalized, null, 2), "utf-8");
+  return normalized;
+}
+
+function findEventRecord(state, eventId) {
+  return state.events.find((item) => item.id === eventId) ?? null;
+}
+
+function snapshotFromRecord(record) {
+  return {
+    event: {
+      id: record.id,
+      name: record.name,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
     },
+    metadata: record.metadata,
+    events: record.rows,
+    versions: record.versions,
   };
-  fs.writeFileSync(DATA_FILE, JSON.stringify(nextState, null, 2), "utf-8");
-  return nextState;
 }
 
-function pushVersion(state, entry) {
-  const versionEntry = {
-    id: randomUUID(),
-    timestamp: new Date().toISOString(),
-    ...entry,
+function plannerEventSummaryFromRecord(record) {
+  return {
+    id: record.id,
+    name: record.name,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    totalRows: record.rows.length,
+    sourceFile: record.metadata.sourceFile,
+    importedAt: record.metadata.importedAt,
+    match: record.metadata.match,
   };
-  state.versions = [versionEntry, ...state.versions].slice(0, 2000);
 }
 
-export function getCuesheet() {
-  return readState();
-}
-
-export function replaceCuesheet({ events, sourceFile, actor }) {
+export function listPlannerEvents() {
   const state = readState();
-  const normalizedEvents = rebuildTimeline(
-    (events ?? []).map((event, index) => normalizeEvent(event, actor, index)),
-  ).map((event) => ({ ...event, updatedAt: new Date().toISOString() }));
+  return state.events
+    .map((record) => plannerEventSummaryFromRecord(record))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
 
-  const next = {
-    metadata: {
-      ...state.metadata,
-      sourceFile: sourceFile ?? state.metadata.sourceFile ?? null,
-      importedAt: new Date().toISOString(),
-    },
-    events: normalizedEvents,
-    versions: state.versions,
-  };
+export function listVenues() {
+  const state = readState();
+  return (state.venues ?? [])
+    .map((venue) => normalizeVenue(venue))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
 
-  pushVersion(next, {
-    action: "import_replace",
+export function createVenue(payload, actor) {
+  const state = readState();
+  const next = normalizeVenue(payload);
+  next.updatedAt = nowIso();
+  next.createdAt = next.createdAt || next.updatedAt;
+  state.venues = [...(state.venues ?? []), next];
+  writeState(state);
+  return next;
+}
+
+export function listActivations() {
+  const state = readState();
+  return (state.activations ?? [])
+    .map((activation) => normalizeActivation(activation))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export function createActivation(payload, actor) {
+  const state = readState();
+  const next = normalizeActivation(payload);
+  next.updatedAt = nowIso();
+  next.createdAt = next.createdAt || next.updatedAt;
+  state.activations = [...(state.activations ?? []), next];
+  writeState(state);
+  return next;
+}
+
+export function updateActivation(activationId, payload, actor) {
+  const state = readState();
+  const index = (state.activations ?? []).findIndex((activation) => activation.id === activationId);
+  if (index === -1) return null;
+
+  const current = normalizeActivation(state.activations[index]);
+  const merged = normalizeActivation({
+    ...current,
+    ...payload,
+    id: current.id,
+    createdAt: current.createdAt,
+  });
+  merged.updatedAt = nowIso();
+
+  state.activations[index] = merged;
+  writeState(state);
+  return merged;
+}
+
+export function deleteActivation(activationId) {
+  const state = readState();
+  const index = (state.activations ?? []).findIndex((activation) => activation.id === activationId);
+  if (index === -1) return null;
+  const [removed] = state.activations.splice(index, 1);
+  writeState(state);
+  return normalizeActivation(removed);
+}
+
+export function getPlannerEventSnapshot(eventId) {
+  const state = readState();
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+  return snapshotFromRecord(record);
+}
+
+export function createPlannerEvent(payload, actor) {
+  const state = readState();
+  const baseName = sanitizeText(payload?.name);
+  const metadata = normalizeMetadata({
+    name: "Live Engine Cue Sheet",
+    match: payload?.match ?? {},
+  });
+  const record = createEventRecord({
+    name: baseName || metadata.match.matchId || `Event ${state.events.length + 1}`,
+    metadata,
+    rows: [],
+    versions: [],
+  });
+
+  pushVersion(record, {
+    action: "planner_event_create",
+    actor: actor || "system",
+    details: { name: record.name },
+  });
+
+  state.events.push(record);
+  writeState(state);
+  return snapshotFromRecord(record);
+}
+
+export function updatePlannerEvent(eventId, payload, actor) {
+  const state = readState();
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+
+  const patchName = sanitizeText(payload?.name);
+  const hasMatchPatch = payload?.match && typeof payload.match === "object";
+
+  if (hasMatchPatch) {
+    record.metadata = {
+      ...record.metadata,
+      match: normalizeMatchInfo(payload.match),
+      updatedAt: nowIso(),
+    };
+  }
+
+  record.name =
+    patchName ||
+    sanitizeText(record.name) ||
+    sanitizeText(record.metadata?.match?.matchId) ||
+    "Untitled Event";
+  record.updatedAt = nowIso();
+
+  pushVersion(record, {
+    action: "planner_event_update",
     actor: actor || "system",
     details: {
-      sourceFile: next.metadata.sourceFile,
-      totalEvents: normalizedEvents.length,
+      name: record.name,
+      matchId: record.metadata.match?.matchId ?? null,
+      venue: record.metadata.match?.venue ?? null,
     },
   });
 
-  return writeState(next);
+  writeState(state);
+  return snapshotFromRecord(record);
 }
 
-export function updateMatchInfo(patch, actor) {
+export function deletePlannerEvent(eventId, actor) {
   const state = readState();
-  const current = normalizeMatchInfo(state.metadata.match);
+  const index = state.events.findIndex((eventRecord) => eventRecord.id === eventId);
+  if (index === -1) return null;
+  const [removed] = state.events.splice(index, 1);
+  writeState(state);
+  return plannerEventSummaryFromRecord(removed);
+}
+
+export function replaceCuesheet(eventId, { rows, sourceFile, actor }) {
+  const state = readState();
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+
+  const normalizedRows = rebuildTimeline(
+    (rows ?? []).map((row, index) => normalizeRow(row, actor, index)),
+  ).map((row) => ({ ...row, updatedAt: nowIso(), updatedBy: actor || "system" }));
+
+  record.rows = normalizedRows;
+  record.metadata = {
+    ...record.metadata,
+    sourceFile: sourceFile ?? record.metadata.sourceFile ?? null,
+    importedAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+  record.updatedAt = nowIso();
+
+  pushVersion(record, {
+    action: "import_replace",
+    actor: actor || "system",
+    details: {
+      sourceFile: record.metadata.sourceFile,
+      totalEvents: normalizedRows.length,
+    },
+  });
+
+  writeState(state);
+  return snapshotFromRecord(record);
+}
+
+export function updateMatchInfo(eventId, patch, actor) {
+  const state = readState();
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+
+  const current = normalizeMatchInfo(record.metadata.match);
   const nextMatch = {
     ...current,
     ...patch,
@@ -244,30 +607,34 @@ export function updateMatchInfo(patch, actor) {
     teamB: patch.teamB ? { ...current.teamB, ...patch.teamB } : current.teamB,
   };
 
-  const next = {
-    ...state,
-    metadata: {
-      ...state.metadata,
-      match: normalizeMatchInfo(nextMatch),
-    },
+  record.metadata = {
+    ...record.metadata,
+    match: normalizeMatchInfo(nextMatch),
+    updatedAt: nowIso(),
   };
+  record.name = sanitizeText(record.name) || record.metadata.match.matchId || "Untitled Event";
+  record.updatedAt = nowIso();
 
-  pushVersion(next, {
+  pushVersion(record, {
     action: "match_update",
     actor: actor || "system",
     details: {
-      matchId: next.metadata.match.matchId,
-      venue: next.metadata.match.venue,
-      city: next.metadata.match.city,
+      matchId: record.metadata.match.matchId,
+      venue: record.metadata.match.venue,
+      city: record.metadata.match.city,
     },
   });
 
-  return writeState(next);
+  writeState(state);
+  return snapshotFromRecord(record);
 }
 
-export function createEvent(payload, actor) {
+export function createRow(eventId, payload, actor) {
   const state = readState();
-  const event = normalizeEvent(
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+
+  const row = normalizeRow(
     {
       ...payload,
       id: randomUUID(),
@@ -275,96 +642,150 @@ export function createEvent(payload, actor) {
       raw: {},
     },
     actor || "user",
-    state.events.length,
+    record.rows.length,
   );
-  state.events.push(event);
-  state.events = rebuildTimeline(state.events);
-  pushVersion(state, {
-    action: "event_create",
+
+  record.rows.push(row);
+  record.rows = rebuildTimeline(record.rows).map((item) => ({
+    ...item,
+    updatedAt: nowIso(),
+    updatedBy: actor || "user",
+  }));
+  record.updatedAt = nowIso();
+
+  pushVersion(record, {
+    action: "row_create",
     actor: actor || "user",
-    eventId: event.id,
-    after: event,
+    eventId: row.id,
+    after: row,
   });
-  return writeState(state);
+
+  writeState(state);
+  return snapshotFromRecord(record);
 }
 
-export function updateEvent(id, payload, actor) {
+export function updateRow(eventId, rowId, payload, actor) {
   const state = readState();
-  const index = state.events.findIndex((event) => event.id === id);
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+
+  const index = record.rows.findIndex((row) => row.id === rowId);
   if (index === -1) return null;
 
-  const before = state.events[index];
+  const before = record.rows[index];
   const allowedKeys = [
     "phase",
     "category",
     "cue",
     "asset",
     "operator",
+    "audio",
+    "script",
+    "activationId",
     "status",
     "notes",
   ];
+
   const patch = Object.fromEntries(
     Object.entries(payload)
       .filter(([key]) => allowedKeys.includes(key))
       .map(([key, value]) => [key, sanitizeText(value)]),
   );
 
-  const after = {
+  if (Array.isArray(payload.screenTargets)) {
+    patch.screenTargets = payload.screenTargets.map((item) => normalizeScreenTarget(item));
+  }
+
+  record.rows[index] = {
     ...before,
     ...patch,
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIso(),
     updatedBy: actor || "user",
   };
 
-  state.events[index] = after;
-  state.events = rebuildTimeline(state.events).map((event) =>
-    event.id === id ? { ...event, updatedAt: new Date().toISOString(), updatedBy: actor || "user" } : event,
+  record.rows = rebuildTimeline(record.rows).map((row) =>
+    row.id === rowId ? { ...row, updatedAt: nowIso(), updatedBy: actor || "user" } : row,
   );
-  pushVersion(state, {
-    action: "event_update",
+  record.updatedAt = nowIso();
+
+  pushVersion(record, {
+    action: "row_update",
     actor: actor || "user",
-    eventId: id,
+    eventId: rowId,
     before,
-    after: state.events.find((event) => event.id === id),
+    after: record.rows.find((row) => row.id === rowId),
   });
-  return writeState(state);
+
+  writeState(state);
+  return snapshotFromRecord(record);
 }
 
-export function deleteEvent(id, actor) {
+export function deleteRow(eventId, rowId, actor) {
   const state = readState();
-  const index = state.events.findIndex((event) => event.id === id);
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+
+  const index = record.rows.findIndex((row) => row.id === rowId);
   if (index === -1) return null;
-  const [removed] = state.events.splice(index, 1);
-  state.events = rebuildTimeline(state.events).map((event) => ({
-    ...event,
-    updatedAt: new Date().toISOString(),
+
+  const [removed] = record.rows.splice(index, 1);
+  record.rows = rebuildTimeline(record.rows).map((row) => ({
+    ...row,
+    updatedAt: nowIso(),
     updatedBy: actor || "user",
   }));
-  pushVersion(state, {
-    action: "event_delete",
+  record.updatedAt = nowIso();
+
+  pushVersion(record, {
+    action: "row_delete",
     actor: actor || "user",
-    eventId: id,
+    eventId: rowId,
     before: removed,
   });
-  return writeState(state);
+
+  writeState(state);
+  return snapshotFromRecord(record);
 }
 
-export function reorderEvents(orderedIds, actor) {
+export function reorderRows(eventId, orderedIds, actor) {
   const state = readState();
-  const map = new Map(state.events.map((event) => [event.id, event]));
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+
+  const map = new Map(record.rows.map((row) => [row.id, row]));
   const reordered = orderedIds
     .map((id) => map.get(id))
     .filter(Boolean)
-    .concat(state.events.filter((event) => !orderedIds.includes(event.id)));
-  state.events = rebuildTimeline(reordered).map((event) => ({
-    ...event,
-    updatedAt: new Date().toISOString(),
+    .concat(record.rows.filter((row) => !orderedIds.includes(row.id)));
+
+  record.rows = rebuildTimeline(reordered).map((row) => ({
+    ...row,
+    updatedAt: nowIso(),
     updatedBy: actor || "user",
   }));
-  pushVersion(state, {
-    action: "events_reorder",
+  record.updatedAt = nowIso();
+
+  pushVersion(record, {
+    action: "rows_reorder",
     actor: actor || "user",
-    details: { total: state.events.length },
+    details: { total: record.rows.length },
   });
-  return writeState(state);
+
+  writeState(state);
+  return snapshotFromRecord(record);
+}
+
+export function getVersions(eventId, limit = 100) {
+  const state = readState();
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
+  return record.versions.slice(0, safeLimit);
+}
+
+export function ensurePlannerEvent(actor, payload = {}) {
+  const existing = listPlannerEvents();
+  if (existing.length > 0) return existing[0].id;
+  const created = createPlannerEvent(payload, actor);
+  return created.event.id;
 }

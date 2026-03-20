@@ -45,8 +45,8 @@ export function HardConfirmModal({
   const canConfirm = value.trim().toUpperCase() === expectedCode;
 
   return (
-    <div className="modal-overlay">
-      <Card className="modal modal-confirm">
+    <div className="modal-overlay" onMouseDown={onCancel}>
+      <Card className="modal modal-confirm" onMouseDown={(event) => event.stopPropagation()}>
         <CardHeader>
           <CardTitle>{title}</CardTitle>
         </CardHeader>
