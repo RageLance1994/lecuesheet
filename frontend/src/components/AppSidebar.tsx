@@ -38,6 +38,7 @@ export function AppSidebar({
     ? selectedTournament.hostCountries.join(", ")
     : "-";
   const selectedFederation = selectedTournament?.federation || "-";
+  const selectedMetaInline = `Paesi: ${selectedCountries}   Anno: ${selectedYear ?? "-"}   Federazione: ${selectedFederation}`;
 
   useEffect(() => {
     function onMouseDown(event: MouseEvent) {
@@ -82,9 +83,7 @@ export function AppSidebar({
               <span>{selectedTournament?.name || "Select tournament"}</span>
             </span>
             <span className="sidebar-tournament-switch__select-details">
-              <span><strong>Paesi:</strong> {selectedCountries}</span>
-              <span><strong>Anno:</strong> {selectedYear ?? "-"}</span>
-              <span><strong>Federazione:</strong> {selectedFederation}</span>
+              {selectedMetaInline}
             </span>
             <i
               className={`fa-solid ${selectorOpen ? "fa-chevron-up" : "fa-chevron-down"} sidebar-tournament-switch__select-caret`}
@@ -115,6 +114,7 @@ export function AppSidebar({
                 ? tournament.hostCountries.join(", ")
                 : "-";
               const federation = tournament.federation || "-";
+              const metaInline = `Paesi: ${countries}   Anno: ${year ?? "-"}   Federazione: ${federation}`;
               return (
                 <button
                   key={tournament.id}
@@ -139,9 +139,7 @@ export function AppSidebar({
                     )}
                     <strong>{tournament.name}</strong>
                   </span>
-                  <span><strong>Paesi:</strong> {countries}</span>
-                  <span><strong>Anno:</strong> {year ?? "-"}</span>
-                  <span><strong>Federazione:</strong> {federation}</span>
+                  <span className="sidebar-tournament-switch__selector-meta">{metaInline}</span>
                 </button>
               );
             })}

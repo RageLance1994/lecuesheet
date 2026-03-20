@@ -155,7 +155,7 @@ h3 {
   color: #e6f0ff;
   border-radius: 8px;
   font: inherit;
-  padding: 0.42rem 0.48rem;
+  padding: 0.48rem 0.56rem;
   width: 100%;
   outline: none;
   display: grid;
@@ -175,6 +175,7 @@ h3 {
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
+  white-space: nowrap;
 }
 
 .sidebar-tournament-switch__logo {
@@ -211,11 +212,12 @@ h3 {
 .sidebar-tournament-switch__select-details {
   grid-column: 1;
   grid-row: 2;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.34rem 0.6rem;
+  display: block;
   font-size: 0.67rem;
   color: #9cb4d8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-tournament-switch__select-details strong {
@@ -256,6 +258,7 @@ h3 {
   top: calc(100% + 6px);
   left: 0;
   right: 0;
+  min-width: 320px;
   border-radius: 10px;
   border: 0;
   background: #0f1624;
@@ -286,8 +289,8 @@ h3 {
   background: transparent;
   color: #dbe9ff;
   display: grid;
-  gap: 0.12rem;
-  padding: 0.34rem 0.12rem 0.4rem;
+  gap: 0.18rem;
+  padding: 0.46rem 0.56rem;
   text-align: left;
   cursor: pointer;
 }
@@ -308,6 +311,8 @@ h3 {
   display: inline-flex;
   align-items: center;
   gap: 0.42rem;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .sidebar-tournament-switch__selector-item > span {
@@ -319,8 +324,10 @@ h3 {
   color: #e3efff;
 }
 
-.sidebar-tournament-switch__selector-item strong + span {
-  margin-left: 0.32rem;
+.sidebar-tournament-switch__selector-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-tournament-switch__menu button {
