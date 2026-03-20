@@ -180,6 +180,7 @@ const tournamentSchema = z
     name: z.string().min(1),
     startDate: optionalTextSchema,
     endDate: optionalTextSchema,
+    federation: optionalTextSchema,
     logoUrl: optionalTextSchema,
     keyPeople: z.array(z.string()).optional(),
     matchesCount: z.number().int().nonnegative().nullable().optional(),

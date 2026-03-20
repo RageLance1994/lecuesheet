@@ -29,6 +29,15 @@ export function AppSidebar({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedTournament =
     tournaments.find((item) => item.id === selectedTournamentId) ?? tournaments[0] ?? null;
+  const selectedYear = selectedTournament?.startDate
+    ? new Date(selectedTournament.startDate).getFullYear()
+    : selectedTournament?.endDate
+      ? new Date(selectedTournament.endDate).getFullYear()
+      : null;
+  const selectedCountries = selectedTournament?.hostCountries?.length
+    ? selectedTournament.hostCountries.join(", ")
+    : "-";
+  const selectedFederation = selectedTournament?.federation || "-";
 
   useEffect(() => {
     function onMouseDown(event: MouseEvent) {
@@ -72,6 +81,11 @@ export function AppSidebar({
               )}
               <span>{selectedTournament?.name || "Select tournament"}</span>
             </span>
+            <span className="sidebar-tournament-switch__select-details">
+              <span><strong>Paesi:</strong> {selectedCountries}</span>
+              <span><strong>Anno:</strong> {selectedYear ?? "-"}</span>
+              <span><strong>Federazione:</strong> {selectedFederation}</span>
+            </span>
             <i
               className={`fa-solid ${selectorOpen ? "fa-chevron-up" : "fa-chevron-down"} sidebar-tournament-switch__select-caret`}
             />
@@ -85,23 +99,22 @@ export function AppSidebar({
               setMenuOpen((open) => !open);
             }}
           >
-            <i className="fa-solid fa-ellipsis" />
+            <i className="fa-solid fa-ellipsis-horizontal" />
           </button>
         </div>
         {selectorOpen ? (
           <div className="sidebar-tournament-switch__selector-menu">
             {tournaments.map((tournament) => {
               const isSelected = tournament.id === selectedTournamentId;
-              const meta = [
-                tournament.format || null,
-                tournament.startDate && tournament.endDate
-                  ? `${tournament.startDate} - ${tournament.endDate}`
-                  : tournament.startDate || tournament.endDate || null,
-                tournament.matchesCount ? `${tournament.matchesCount} matches` : null,
-                tournament.teamsCount ? `${tournament.teamsCount} teams` : null,
-              ]
-                .filter(Boolean)
-                .join(" | ");
+              const year = tournament.startDate
+                ? new Date(tournament.startDate).getFullYear()
+                : tournament.endDate
+                  ? new Date(tournament.endDate).getFullYear()
+                  : null;
+              const countries = tournament.hostCountries?.length
+                ? tournament.hostCountries.join(", ")
+                : "-";
+              const federation = tournament.federation || "-";
               return (
                 <button
                   key={tournament.id}
@@ -126,7 +139,9 @@ export function AppSidebar({
                     )}
                     <strong>{tournament.name}</strong>
                   </span>
-                  <span>{meta || "No details"}</span>
+                  <span><strong>Paesi:</strong> {countries}</span>
+                  <span><strong>Anno:</strong> {year ?? "-"}</span>
+                  <span><strong>Federazione:</strong> {federation}</span>
                 </button>
               );
             })}

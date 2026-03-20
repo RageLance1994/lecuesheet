@@ -344,6 +344,7 @@ function normalizeTournament(tournament) {
     name: sanitizeText(source.name) || "Untitled Tournament",
     startDate: sanitizeOptionalText(source.startDate),
     endDate: sanitizeOptionalText(source.endDate),
+    federation: sanitizeOptionalText(source.federation),
     logoUrl: sanitizeOptionalText(source.logoUrl),
     keyPeople: sanitizeStringArray(source.keyPeople),
     matchesCount: Number.isFinite(Number(source.matchesCount)) ? Number(source.matchesCount) : null,

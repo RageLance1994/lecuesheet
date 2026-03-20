@@ -149,6 +149,7 @@ export type Tournament = {
   name: string;
   startDate?: string | null;
   endDate?: string | null;
+  federation?: string | null;
   logoUrl?: string | null;
   keyPeople: string[];
   matchesCount?: number | null;
@@ -258,6 +259,7 @@ export const api = {
     name: string;
     startDate?: string | null;
     endDate?: string | null;
+    federation?: string | null;
     logoUrl?: string | null;
     keyPeople?: string[];
     matchesCount?: number | null;
@@ -278,6 +280,7 @@ export const api = {
       name?: string;
       startDate?: string | null;
       endDate?: string | null;
+      federation?: string | null;
       logoUrl?: string | null;
       keyPeople?: string[];
       matchesCount?: number | null;

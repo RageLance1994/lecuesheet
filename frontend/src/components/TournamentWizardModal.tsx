@@ -29,6 +29,7 @@ export type TournamentDraft = {
   name: string;
   startDate: string;
   endDate: string;
+  federation: string;
   logoUrl: string;
   keyPeople: string[];
   matchesCount: string;
@@ -52,6 +53,7 @@ export function emptyTournamentDraft(): TournamentDraft {
     name: "",
     startDate: "",
     endDate: "",
+    federation: "",
     logoUrl: "",
     keyPeople: [],
     matchesCount: "",
@@ -119,6 +121,14 @@ export function TournamentWizardModal({
                 type="date"
                 value={draft.endDate}
                 onChange={(event) => onChange({ ...draft, endDate: event.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>Federazione</span>
+              <input
+                value={draft.federation}
+                onChange={(event) => onChange({ ...draft, federation: event.target.value })}
+                placeholder="UEFA"
               />
             </label>
             <label className="field">
