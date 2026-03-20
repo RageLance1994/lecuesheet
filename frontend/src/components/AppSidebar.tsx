@@ -99,11 +99,11 @@ export function AppSidebar({
               setMenuOpen((open) => !open);
             }}
           >
-            <i className="fa-solid fa-ellipsis-horizontal" />
+            <i className="fa-solid fa-ellipsis-vertical" />
           </button>
         </div>
         {selectorOpen ? (
-          <div className="sidebar-tournament-switch__selector-menu">
+          <div className="sidebar-tournament-switch__selector-menu is-open">
             {tournaments.map((tournament) => {
               const isSelected = tournament.id === selectedTournamentId;
               const year = tournament.startDate
@@ -148,7 +148,7 @@ export function AppSidebar({
           </div>
         ) : null}
         {menuOpen ? (
-          <div className="sidebar-tournament-switch__menu">
+          <div className="sidebar-tournament-switch__menu is-open">
             <button
               type="button"
               onClick={() => {
