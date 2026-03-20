@@ -160,17 +160,14 @@ h3 {
   outline: none;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
   align-items: center;
   column-gap: 0.45rem;
-  row-gap: 0.15rem;
   text-align: left;
   cursor: pointer;
 }
 
 .sidebar-tournament-switch__select-main {
   grid-column: 1;
-  grid-row: 1;
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -204,15 +201,12 @@ h3 {
 
 .sidebar-tournament-switch__select-caret {
   grid-column: 2;
-  grid-row: 1 / span 2;
   flex: 0 0 auto;
   color: #a8c1e6;
 }
 
 .sidebar-tournament-switch__select-details {
-  grid-column: 1;
-  grid-row: 2;
-  display: block;
+  display: none;
   font-size: 0.67rem;
   color: #9cb4d8;
   white-space: nowrap;

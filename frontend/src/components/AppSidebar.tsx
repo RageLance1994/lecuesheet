@@ -29,16 +29,6 @@ export function AppSidebar({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedTournament =
     tournaments.find((item) => item.id === selectedTournamentId) ?? tournaments[0] ?? null;
-  const selectedYear = selectedTournament?.startDate
-    ? new Date(selectedTournament.startDate).getFullYear()
-    : selectedTournament?.endDate
-      ? new Date(selectedTournament.endDate).getFullYear()
-      : null;
-  const selectedCountries = selectedTournament?.hostCountries?.length
-    ? selectedTournament.hostCountries.join(", ")
-    : "-";
-  const selectedFederation = selectedTournament?.federation || "-";
-  const selectedMetaInline = `Paesi: ${selectedCountries}   Anno: ${selectedYear ?? "-"}   Federazione: ${selectedFederation}`;
 
   useEffect(() => {
     function onMouseDown(event: MouseEvent) {
@@ -81,9 +71,6 @@ export function AppSidebar({
                 </span>
               )}
               <span>{selectedTournament?.name || "Select tournament"}</span>
-            </span>
-            <span className="sidebar-tournament-switch__select-details">
-              {selectedMetaInline}
             </span>
             <i
               className={`fa-solid ${selectorOpen ? "fa-chevron-up" : "fa-chevron-down"} sidebar-tournament-switch__select-caret`}
