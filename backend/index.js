@@ -335,6 +335,49 @@ function actorFromRequest(req, user) {
   return user?.email || req.header("x-user")?.trim() || "operator";
 }
 
+function normalizeMoney(value) {
+  const raw = String(value || "").trim().replace(/\s+/g, "").replace(",", ".");
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function extractHeuristicFinanceFromText(text) {
+  const source = String(text || "");
+  const amountLine =
+    source.match(/(?:Ammontare|Amount)\s*[:\-]?\s*([0-9]+(?:[.,][0-9]{1,2})?)\s*(EUR|USD|GBP|AED|SAR)?/i) ||
+    source.match(/([0-9]+(?:[.,][0-9]{1,2})?)\s*(EUR|USD|GBP|AED|SAR)\b/i);
+  const vendorLine =
+    source.match(/(?:Paid\s*For|Payment\s*For|Descrizione|Merchant)\s*[:\-]?\s*(.+)/i) || null;
+  const dateLine =
+    source.match(/(\d{1,2}\s+[A-Za-zÀ-ÿ]+\s*,?\s*\d{4})/) ||
+    source.match(/(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{4})/) ||
+    null;
+
+  const amount = normalizeMoney(amountLine?.[1]);
+  const currency = String(amountLine?.[2] || "EUR").trim().toUpperCase();
+  const vendor = vendorLine?.[1]?.trim() || null;
+  const documentDate = dateLine?.[1]?.trim() || null;
+
+  const expenses =
+    amount && amount > 0
+      ? parseExpenseText(`${vendor || "service fee"} ${amount} ${currency}`).map((item) => ({
+          ...item,
+          category: item.category === "other" ? "fees" : item.category,
+          vendor: item.vendor || vendor,
+          date: item.date || documentDate,
+        }))
+      : [];
+
+  return {
+    amount: amount ?? 0,
+    currency,
+    vendor,
+    documentDate,
+    summary: amount && amount > 0 ? "Heuristic finance extraction" : "",
+    expenses,
+  };
+}
+
 async function broadcastSnapshot(eventId) {
   const snapshot = await getPlannerEventSnapshot(eventId);
   if (!snapshot) return;
@@ -511,16 +554,21 @@ app.post(
       const fallbackExpenses = parseExpenseText(text);
       const fallbackAmount = fallbackExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
       const fallbackCurrency = fallbackExpenses[0]?.currency || "EUR";
+      const heuristic = extractHeuristicFinanceFromText(text);
 
       const hasOpenAIKey = Boolean(String(process.env.OPENAI_API_KEY || "").trim());
       if (!hasOpenAIKey) {
+        const amount = heuristic.amount > 0 ? heuristic.amount : fallbackAmount;
+        const expenses = heuristic.expenses.length ? heuristic.expenses : fallbackExpenses;
         return res.json({
-          amount: fallbackAmount,
-          currency: fallbackCurrency,
-          vendor: null,
-          documentDate: null,
-          summary: fallbackExpenses.length ? `${fallbackExpenses.length} parsed expense items` : "",
-          expenses: fallbackExpenses,
+          amount,
+          currency: heuristic.currency || fallbackCurrency,
+          vendor: heuristic.vendor,
+          documentDate: heuristic.documentDate,
+          summary:
+            heuristic.summary ||
+            (expenses.length ? `${expenses.length} parsed expense items` : ""),
+          expenses,
           source: "fallback",
         });
       }
@@ -562,23 +610,35 @@ Rules:
 
       const aiExpenses = aiExpensesText ? parseExpenseText(aiExpensesText) : [];
       const amountCandidate = Number(aiJson?.amount);
+      const heuristicAmount = heuristic.amount > 0 ? heuristic.amount : 0;
       const amount = Number.isFinite(amountCandidate)
         ? amountCandidate
-        : aiExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0) || fallbackAmount;
+        : aiExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0) ||
+          heuristicAmount ||
+          fallbackAmount;
       const currency = String(aiJson?.currency || aiExpenses[0]?.currency || fallbackCurrency || "EUR")
         .trim()
         .toUpperCase();
-      const vendor = typeof aiJson?.vendor === "string" && aiJson.vendor.trim() ? aiJson.vendor.trim() : null;
+      const vendor =
+        typeof aiJson?.vendor === "string" && aiJson.vendor.trim()
+          ? aiJson.vendor.trim()
+          : heuristic.vendor;
       const documentDate =
         typeof aiJson?.documentDate === "string" && aiJson.documentDate.trim()
           ? aiJson.documentDate.trim()
-          : null;
+          : heuristic.documentDate;
       const summary =
         typeof aiJson?.summary === "string" && aiJson.summary.trim()
           ? aiJson.summary.trim()
           : aiExpenses.length
             ? `${aiExpenses.length} parsed expense items`
-            : "";
+            : heuristic.summary;
+      const expenses =
+        aiExpenses.length
+          ? aiExpenses
+          : heuristic.expenses.length
+            ? heuristic.expenses
+            : fallbackExpenses;
 
       return res.json({
         amount,
@@ -586,7 +646,7 @@ Rules:
         vendor,
         documentDate,
         summary,
-        expenses: aiExpenses.length ? aiExpenses : fallbackExpenses,
+        expenses,
         source: "openai",
       });
     } catch (error) {
@@ -595,13 +655,18 @@ Rules:
       const text = String(parsed?.text || "").trim();
       const fallbackExpenses = parseExpenseText(text);
       const fallbackAmount = fallbackExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const heuristic = extractHeuristicFinanceFromText(text);
+      const amount = heuristic.amount > 0 ? heuristic.amount : fallbackAmount;
+      const expenses = heuristic.expenses.length ? heuristic.expenses : fallbackExpenses;
       return res.json({
-        amount: fallbackAmount,
-        currency: fallbackExpenses[0]?.currency || "EUR",
-        vendor: null,
-        documentDate: null,
-        summary: fallbackExpenses.length ? `${fallbackExpenses.length} parsed expense items` : "",
-        expenses: fallbackExpenses,
+        amount,
+        currency: heuristic.currency || fallbackExpenses[0]?.currency || "EUR",
+        vendor: heuristic.vendor,
+        documentDate: heuristic.documentDate,
+        summary:
+          heuristic.summary ||
+          (expenses.length ? `${expenses.length} parsed expense items` : ""),
+        expenses,
         source: "fallback_error",
         parserError: error instanceof Error ? error.message : "Failed to parse with OpenAI",
       });
