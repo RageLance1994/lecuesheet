@@ -28,7 +28,7 @@ const STEPS = [
   {
     key: "schedule",
     title: "Schedule",
-    description: "Gates, date, kickoff, and venue.",
+    description: "Gates, date, kick-off (local time), and venue.",
   },
 ] as const;
 
@@ -306,7 +306,7 @@ export function MatchPlannerModal({
                       />
                     </label>
                     <label className="field">
-                      <span>Kickoff Time</span>
+                      <span>Kick-off (Local Time)</span>
                       <input
                         type="time"
                         value={draft.kickoffTime}
@@ -367,7 +367,7 @@ export function MatchPlannerModal({
                     <strong>{draft.date || "-"}</strong>
                   </div>
                   <div>
-                    <span>Kickoff Time</span>
+                    <span>Kick-off (Local Time)</span>
                     <strong>{draft.kickoffTime || "-"}</strong>
                   </div>
                   <div className="planner-preview__venue">

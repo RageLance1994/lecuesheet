@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import { AppSidebar } from "../components/AppSidebar";
 import { CueTable } from "../components/CueTable";
 import type { CueColumnKey } from "../components/CueTable";
 import { CuesheetTimeline } from "../components/CuesheetTimeline";
@@ -11,7 +12,7 @@ import {
 } from "../components/EventFormModal";
 import { HardConfirmModal } from "../components/HardConfirmModal";
 import { api } from "../lib/api";
-import type { Activation, CueEvent, CueSheetSnapshot, Venue } from "../lib/api";
+import type { Activation, CueEvent, CueSheetSnapshot, Tournament, Venue } from "../lib/api";
 import { matchInfoToDraft } from "../lib/api";
 import { Button } from "../components/ui/Button";
 import {
@@ -38,6 +39,12 @@ type EditorState = {
 type Props = {
   eventId: string;
   onNavigate: (path: string) => void;
+  tournaments: Tournament[];
+  selectedTournamentId: string;
+  onSelectTournament: (tournamentId: string) => void;
+  onCreateTournament: () => void;
+  onEditTournament: (tournament: Tournament) => void;
+  onDeleteTournament: (tournament: Tournament) => void;
 };
 
 const initialConfirm: ConfirmState = {
@@ -172,7 +179,16 @@ function moveByIds(events: CueEvent[], draggedId: string, targetId: string) {
   return next;
 }
 
-export function App({ eventId, onNavigate }: Props) {
+export function App({
+  eventId,
+  onNavigate,
+  tournaments,
+  selectedTournamentId,
+  onSelectTournament,
+  onCreateTournament,
+  onEditTournament,
+  onDeleteTournament,
+}: Props) {
   const [snapshot, setSnapshot] = useState<CueSheetSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>("");
@@ -253,12 +269,12 @@ export function App({ eventId, onNavigate }: Props) {
 
   useEffect(() => {
     let active = true;
-    api.getActivations().then((rows) => {
+    api.getActivations(selectedTournamentId).then((rows) => {
       if (active) setActivationOptions(rows);
     }).catch(() => {
       if (active) setActivationOptions([]);
     });
-    api.getVenues().then((rows) => {
+    api.getVenues(selectedTournamentId).then((rows) => {
       if (active) setVenues(rows);
     }).catch(() => {
       if (active) setVenues([]);
@@ -266,7 +282,7 @@ export function App({ eventId, onNavigate }: Props) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [selectedTournamentId]);
 
   useEffect(() => {
     function onClickOutside(event: MouseEvent) {
@@ -380,29 +396,16 @@ export function App({ eventId, onNavigate }: Props) {
 
   return (
     <div className="page-shell">
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <img
-            className="sidebar-brand__logo"
-            src="/mock_liveengine%20logo.png"
-            alt="Live Engine"
-          />
-        </div>
-        <nav className="sidebar-nav">
-          <button className="sidebar-nav__item is-active" onClick={() => onNavigate("/events")}>
-            <i className="fa-solid fa-calendar-days" />
-            <span>Events</span>
-          </button>
-          <button className="sidebar-nav__item" onClick={() => onNavigate("/activations")}>
-            <i className="fa-solid fa-clapperboard" />
-            <span>Activations</span>
-          </button>
-          <button className="sidebar-nav__item" onClick={() => onNavigate("/venues")}>
-            <i className="fa-solid fa-location-dot" />
-            <span>Venues</span>
-          </button>
-        </nav>
-      </aside>
+      <AppSidebar
+        active="events"
+        onNavigate={onNavigate}
+        tournaments={tournaments}
+        selectedTournamentId={selectedTournamentId}
+        onSelectTournament={onSelectTournament}
+        onCreateTournament={onCreateTournament}
+        onEditTournament={onEditTournament}
+        onDeleteTournament={onDeleteTournament}
+      />
 
       <main className="main-content">
         <Card className="match-info-card">
@@ -503,7 +506,7 @@ export function App({ eventId, onNavigate }: Props) {
                 <MatchInfoField label="Gates Open" value={matchInfo.gatesOpen} />
                 <MatchInfoField label="City" value={matchInfo.city} />
                 <MatchInfoField label="Date" value={matchInfo.date} />
-                <MatchInfoField label="Kickoff Time" value={matchInfo.kickoffTime} />
+                <MatchInfoField label="Kick-off (Local Time)" value={matchInfo.kickoffTime} />
                 <MatchInfoField label="Venue" value={matchInfo.venue} />
               </div>
             </div>

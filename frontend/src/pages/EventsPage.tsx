@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AppSidebar } from "../components/AppSidebar";
 import { HardConfirmModal } from "../components/HardConfirmModal";
 import { MatchPlannerModal } from "../components/MatchPlannerModal";
 import { Button } from "../components/ui/Button";
@@ -9,11 +10,18 @@ import {
   matchInfoToDraft,
   type MatchInfoDraft,
   type PlannerEventSummary,
+  type Tournament,
   type Venue,
 } from "../lib/api";
 
 type Props = {
   onNavigate: (path: string) => void;
+  tournaments: Tournament[];
+  selectedTournamentId: string;
+  onSelectTournament: (tournamentId: string) => void;
+  onCreateTournament: () => void;
+  onEditTournament: (tournament: Tournament) => void;
+  onDeleteTournament: (tournament: Tournament) => void;
 };
 
 function toMatchPayload(draft: MatchInfoDraft) {
@@ -38,7 +46,15 @@ function toMatchPayload(draft: MatchInfoDraft) {
   };
 }
 
-export function EventsPage({ onNavigate }: Props) {
+export function EventsPage({
+  onNavigate,
+  tournaments,
+  selectedTournamentId,
+  onSelectTournament,
+  onCreateTournament,
+  onEditTournament,
+  onDeleteTournament,
+}: Props) {
   const [events, setEvents] = useState<PlannerEventSummary[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
   const [busy, setBusy] = useState(false);
@@ -51,7 +67,7 @@ export function EventsPage({ onNavigate }: Props) {
   async function loadEvents() {
     setError("");
     try {
-      const rows = await api.getEvents();
+      const rows = await api.getEvents(selectedTournamentId);
       setEvents(rows);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -60,7 +76,7 @@ export function EventsPage({ onNavigate }: Props) {
 
   async function loadVenues() {
     try {
-      const rows = await api.getVenues();
+      const rows = await api.getVenues(selectedTournamentId);
       setVenues(rows);
     } catch {
       setVenues([]);
@@ -70,7 +86,7 @@ export function EventsPage({ onNavigate }: Props) {
   useEffect(() => {
     void loadEvents();
     void loadVenues();
-  }, []);
+  }, [selectedTournamentId]);
 
   function openCreateWizard() {
     setEditingEventId(null);
@@ -111,6 +127,7 @@ export function EventsPage({ onNavigate }: Props) {
       const created = await api.createPlannerEvent({
         name: draft.matchId || undefined,
         match: toMatchPayload(draft),
+        tournamentId: selectedTournamentId,
       });
       setWizardOpen(false);
       await loadEvents();
@@ -124,29 +141,16 @@ export function EventsPage({ onNavigate }: Props) {
 
   return (
     <div className="page-shell">
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <img
-            className="sidebar-brand__logo"
-            src="/mock_liveengine%20logo.png"
-            alt="Live Engine"
-          />
-        </div>
-        <nav className="sidebar-nav">
-          <button className="sidebar-nav__item is-active" type="button">
-            <i className="fa-solid fa-calendar-days" />
-            <span>Events</span>
-          </button>
-          <button className="sidebar-nav__item" type="button" onClick={() => onNavigate("/activations")}>
-            <i className="fa-solid fa-clapperboard" />
-            <span>Activations</span>
-          </button>
-          <button className="sidebar-nav__item" type="button" onClick={() => onNavigate("/venues")}>
-            <i className="fa-solid fa-location-dot" />
-            <span>Venues</span>
-          </button>
-        </nav>
-      </aside>
+      <AppSidebar
+        active="events"
+        onNavigate={onNavigate}
+        tournaments={tournaments}
+        selectedTournamentId={selectedTournamentId}
+        onSelectTournament={onSelectTournament}
+        onCreateTournament={onCreateTournament}
+        onEditTournament={onEditTournament}
+        onDeleteTournament={onDeleteTournament}
+      />
 
       <main className="main-content">
         <Card className="table-card">
@@ -167,7 +171,7 @@ export function EventsPage({ onNavigate }: Props) {
                     <th>Match ID</th>
                     <th>Teams</th>
                     <th>City</th>
-                    <th>Kickoff</th>
+                    <th>Kick-off (Local Time)</th>
                     <th>Venue</th>
                     <th>Rows</th>
                     <th>Updated</th>

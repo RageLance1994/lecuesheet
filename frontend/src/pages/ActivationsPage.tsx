@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
+import { AppSidebar } from "../components/AppSidebar";
 import { UnsavedChangesModal } from "../components/UnsavedChangesModal";
 import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
-import { api, type Activation } from "../lib/api";
+import { api, type Activation, type Tournament } from "../lib/api";
 
 type Props = {
   onNavigate: (path: string) => void;
+  tournaments: Tournament[];
+  selectedTournamentId: string;
+  onSelectTournament: (tournamentId: string) => void;
+  onCreateTournament: () => void;
+  onEditTournament: (tournament: Tournament) => void;
+  onDeleteTournament: (tournament: Tournament) => void;
 };
 
 type ActivationSpecs = {
@@ -233,7 +240,15 @@ async function extractDroppedFiles(items: DataTransferItem[], files: File[]): Pr
   return dedupeFiles(collected);
 }
 
-export function ActivationsPage({ onNavigate }: Props) {
+export function ActivationsPage({
+  onNavigate,
+  tournaments,
+  selectedTournamentId,
+  onSelectTournament,
+  onCreateTournament,
+  onEditTournament,
+  onDeleteTournament,
+}: Props) {
   const [activations, setActivations] = useState<Activation[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -244,13 +259,15 @@ export function ActivationsPage({ onNavigate }: Props) {
   const [wizardIndex, setWizardIndex] = useState(0);
   const [tagInput, setTagInput] = useState("");
   const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+  const [groupedView, setGroupedView] = useState(true);
+  const [openGroups, setOpenGroups] = useState<string[]>([]);
 
   const currentWizardItem = wizardItems[wizardIndex] ?? null;
 
   async function loadActivations() {
     setError("");
     try {
-      setActivations(await api.getActivations());
+      setActivations(await api.getActivations(selectedTournamentId));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -258,7 +275,7 @@ export function ActivationsPage({ onNavigate }: Props) {
 
   useEffect(() => {
     void loadActivations();
-  }, []);
+  }, [selectedTournamentId]);
 
   function resetWizard() {
     setEditingActivationId(null);
@@ -362,6 +379,7 @@ export function ActivationsPage({ onNavigate }: Props) {
         for (const item of toCreate) {
           await api.createActivation({
             name: item.name.trim(),
+            tournamentId: selectedTournamentId,
             tags: item.tags,
             fileName: item.fileName ?? undefined,
             mimeType: item.mimeType ?? undefined,
@@ -397,6 +415,17 @@ export function ActivationsPage({ onNavigate }: Props) {
   }
 
   const rows = useMemo(() => activations, [activations]);
+  const groupedRows = useMemo(() => {
+    const map = new Map<string, Activation[]>();
+    for (const activation of rows) {
+      const tags = activation.tags.length ? activation.tags : ["Uncategorized"];
+      for (const tag of tags) {
+        if (!map.has(tag)) map.set(tag, []);
+        map.get(tag)?.push(activation);
+      }
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [rows]);
   const canSubmit = editingActivationId
     ? Boolean(currentWizardItem?.name.trim())
     : wizardItems.some((item) => item.name.trim());
@@ -419,37 +448,81 @@ export function ActivationsPage({ onNavigate }: Props) {
     resetWizard();
   }
 
+  function renderActivationRow(item: Activation, rowKey: string) {
+    return (
+      <tr key={rowKey}>
+        <td>{item.name}</td>
+        <td>
+          {item.fileName || "-"}
+          {item.mimeType ? ` (${item.mimeType})` : ""}
+          {item.sizeBytes ? ` - ${formatFileSize(item.sizeBytes)}` : ""}
+        </td>
+        <td>{formatDuration(item.durationMs)}</td>
+        <td>{item.tags.length ? item.tags.join(", ") : "-"}</td>
+        <td>{new Date(item.updatedAt).toLocaleString()}</td>
+        <td>
+          <div className="icon-actions">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              title="Edit activation"
+              onClick={() => openWizardEdit(item)}
+              disabled={busy}
+            >
+              <i className="fa-solid fa-pen-to-square" />
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="icon"
+              title="Delete activation"
+              onClick={() => {
+                void handleDeleteActivation(item.id);
+              }}
+              disabled={busy}
+            >
+              <i className="fa-solid fa-trash" />
+            </Button>
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
   return (
     <div className="page-shell">
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <img className="sidebar-brand__logo" src="/mock_liveengine%20logo.png" alt="Live Engine" />
-        </div>
-        <nav className="sidebar-nav">
-          <button className="sidebar-nav__item" type="button" onClick={() => onNavigate("/events")}>
-            <i className="fa-solid fa-calendar-days" />
-            <span>Events</span>
-          </button>
-          <button className="sidebar-nav__item is-active" type="button">
-            <i className="fa-solid fa-clapperboard" />
-            <span>Activations</span>
-          </button>
-          <button className="sidebar-nav__item" type="button" onClick={() => onNavigate("/venues")}>
-            <i className="fa-solid fa-location-dot" />
-            <span>Venues</span>
-          </button>
-        </nav>
-      </aside>
+      <AppSidebar
+        active="activations"
+        onNavigate={onNavigate}
+        tournaments={tournaments}
+        selectedTournamentId={selectedTournamentId}
+        onSelectTournament={onSelectTournament}
+        onCreateTournament={onCreateTournament}
+        onEditTournament={onEditTournament}
+        onDeleteTournament={onDeleteTournament}
+      />
 
       <main className="main-content">
         <Card className="table-card">
           <CardHeader className="table-card__header">
             <div className="table-card__titlebar">
               <CardTitle>Activations</CardTitle>
-              <Button variant="outline" size="sm" onClick={openWizardCreate} disabled={busy}>
-                <i className="fa-solid fa-plus" />
-                <span>Register Content</span>
-              </Button>
+              <div className="icon-actions">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setGroupedView((current) => !current)}
+                  disabled={busy}
+                >
+                  <i className={`fa-solid ${groupedView ? "fa-list" : "fa-folder-tree"}`} />
+                  <span>{groupedView ? "Flat View" : "Grouped View"}</span>
+                </Button>
+                <Button variant="outline" size="sm" onClick={openWizardCreate} disabled={busy}>
+                  <i className="fa-solid fa-plus" />
+                  <span>Register Content</span>
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -466,45 +539,35 @@ export function ActivationsPage({ onNavigate }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.name}</td>
-                      <td>
-                        {item.fileName || "-"}
-                        {item.mimeType ? ` (${item.mimeType})` : ""}
-                        {item.sizeBytes ? ` - ${formatFileSize(item.sizeBytes)}` : ""}
-                      </td>
-                      <td>{formatDuration(item.durationMs)}</td>
-                      <td>{item.tags.length ? item.tags.join(", ") : "-"}</td>
-                      <td>{new Date(item.updatedAt).toLocaleString()}</td>
-                      <td>
-                        <div className="icon-actions">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon"
-                            title="Edit activation"
-                            onClick={() => openWizardEdit(item)}
-                            disabled={busy}
-                          >
-                            <i className="fa-solid fa-pen-to-square" />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="danger"
-                            size="icon"
-                            title="Delete activation"
-                            onClick={() => {
-                              void handleDeleteActivation(item.id);
-                            }}
-                            disabled={busy}
-                          >
-                            <i className="fa-solid fa-trash" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {groupedView
+                    ? groupedRows.map(([groupName, items]) => {
+                      const isOpen = openGroups.includes(groupName);
+                      return (
+                        <>
+                          <tr key={`group-${groupName}`} className="activation-group-row">
+                            <td colSpan={6}>
+                              <button
+                                type="button"
+                                className="activation-group-row__toggle"
+                                onClick={() =>
+                                  setOpenGroups((prev) =>
+                                    prev.includes(groupName)
+                                      ? prev.filter((item) => item !== groupName)
+                                      : [...prev, groupName],
+                                  )
+                                }
+                              >
+                                <i className={`fa-solid ${isOpen ? "fa-chevron-down" : "fa-chevron-right"}`} />
+                                <strong>{groupName}</strong>
+                                <span>{items.length} items</span>
+                              </button>
+                            </td>
+                          </tr>
+                          {isOpen ? items.map((item) => renderActivationRow(item, `${groupName}-${item.id}`)) : null}
+                        </>
+                      );
+                    })
+                    : rows.map((item) => renderActivationRow(item, item.id))}
                   {rows.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="data-table__empty">No activation contents yet.</td>

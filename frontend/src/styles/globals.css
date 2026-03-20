@@ -97,6 +97,12 @@ h3 {
   line-height: 1.5;
 }
 
+.sidebar button {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+}
+
 .sidebar-nav {
   margin-top: 0.4rem;
   display: grid;
@@ -113,13 +119,127 @@ h3 {
   font: inherit;
   border-radius: 10px;
   padding: 0.55rem 0.7rem;
-  cursor: default;
+  cursor: pointer;
 }
 
 .sidebar-nav__item.is-active {
   border-color: var(--border);
   background: rgba(106, 168, 255, 0.08);
   color: var(--foreground);
+}
+
+.sidebar-tournaments {
+  margin-top: 0.4rem;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 0.65rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.sidebar-tournaments__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #cde1ff;
+}
+
+.sidebar-tournaments__create {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: #cde1ff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.sidebar-tournaments__list {
+  display: grid;
+  gap: 0;
+}
+
+.sidebar-tournament {
+  border-bottom: 1px solid rgba(106, 168, 255, 0.16);
+  padding: 0.35rem 0;
+}
+
+.sidebar-tournament__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.2rem;
+}
+
+.sidebar-tournament__row.is-selected {
+  background: transparent;
+}
+
+.sidebar-tournament__toggle {
+  border: 0;
+  background: transparent;
+  color: #dce9ff;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.sidebar-tournament__toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-tournament__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.sidebar-tournament__actions button {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid rgba(106, 168, 255, 0.24);
+  background: transparent;
+  color: #cde1ff;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.sidebar-tournament__menu {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.2rem 0.2rem 0.12rem 1.15rem;
+}
+
+.sidebar-tournament__menu button {
+  border: 1px solid rgba(106, 168, 255, 0.18);
+  border-radius: 8px;
+  background: transparent;
+  color: #b8cef3;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font: inherit;
+  padding: 0.34rem 0.52rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-tournament__menu button:hover {
+  background: rgba(106, 168, 255, 0.08);
+  color: #e4efff;
 }
 
 .main-content {
@@ -1339,6 +1459,30 @@ h3 {
   padding: 0;
   height: 132px;
   position: relative;
+}
+
+.activation-group-row td {
+  padding: 0 !important;
+  border-bottom: 1px solid rgba(106, 168, 255, 0.15);
+}
+
+.activation-group-row__toggle {
+  width: 100%;
+  border: 0;
+  background: rgba(106, 168, 255, 0.08);
+  color: #d6e7ff;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.48rem 0.58rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.activation-group-row__toggle span {
+  color: #adc6ed;
+  margin-left: auto;
+  font-size: 0.76rem;
 }
 
 .activation-dropzone {

@@ -1,8 +1,8 @@
 export const PHASES = [
   { key: "GATES_OPEN", label: "Gates Open" },
-  { key: "KICK_OFF", label: "Kick Off" },
+  { key: "KICK_OFF", label: "Kick Off (Local Time)" },
   { key: "HT_HALF_TIME", label: "HT-Half Time" },
-  { key: "SECOND_HALF_KICK_OFF", label: "2nd HALF KICK OFF" },
+  { key: "SECOND_HALF_KICK_OFF", label: "2nd HALF KICK OFF (Local Time)" },
   { key: "FULL_TIME", label: "FULL TIME" },
 ] as const;
 
@@ -44,6 +44,7 @@ export type MatchInfoDraft = {
 
 export type PlannerEventSummary = {
   id: string;
+  tournamentId?: string | null;
   name: string;
   createdAt: string;
   updatedAt: string;
@@ -55,6 +56,7 @@ export type PlannerEventSummary = {
 
 export type Venue = {
   id: string;
+  tournamentId?: string | null;
   name: string;
   city?: string | null;
   address?: string | null;
@@ -84,6 +86,7 @@ export type Venue = {
 
 export type Activation = {
   id: string;
+  tournamentId?: string | null;
   name: string;
   fileName?: string | null;
   mimeType?: string | null;
@@ -141,6 +144,21 @@ export type CueSheetSnapshot = {
   versions: VersionItem[];
 };
 
+export type Tournament = {
+  id: string;
+  name: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  logoUrl?: string | null;
+  keyPeople: string[];
+  matchesCount?: number | null;
+  format?: string | null;
+  teamsCount?: number | null;
+  hostCountries: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export function emptyMatchInfo(): MatchInfoDraft {
   return {
     matchId: "",
@@ -166,6 +184,12 @@ async function parseResponse<T>(responsePromise: Promise<Response>): Promise<T> 
     throw new Error(errorBody || `Request failed with status ${response.status}`);
   }
   return response.json() as Promise<T>;
+}
+
+function withTournamentQuery(path: string, tournamentId?: string | null) {
+  if (!tournamentId?.trim()) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}tournamentId=${encodeURIComponent(tournamentId)}`;
 }
 
 function normalizeMatchInfoDraft(payload?: Partial<MatchInfoDraft> | null): MatchInfoDraft {
@@ -229,10 +253,59 @@ function draftToMatchPatch(draft: MatchInfoDraft): MatchInfo {
 }
 
 export const api = {
-  getEvents: () => parseResponse<PlannerEventSummary[]>(fetch("/api/events")),
-  getActivations: () => parseResponse<Activation[]>(fetch("/api/activations")),
+  getTournaments: () => parseResponse<Tournament[]>(fetch("/api/tournaments")),
+  createTournament: (payload: {
+    name: string;
+    startDate?: string | null;
+    endDate?: string | null;
+    logoUrl?: string | null;
+    keyPeople?: string[];
+    matchesCount?: number | null;
+    format?: string | null;
+    teamsCount?: number | null;
+    hostCountries?: string[];
+  }) =>
+    parseResponse<Tournament>(
+      fetch("/api/tournaments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  updateTournament: (
+    tournamentId: string,
+    payload: {
+      name?: string;
+      startDate?: string | null;
+      endDate?: string | null;
+      logoUrl?: string | null;
+      keyPeople?: string[];
+      matchesCount?: number | null;
+      format?: string | null;
+      teamsCount?: number | null;
+      hostCountries?: string[];
+    },
+  ) =>
+    parseResponse<Tournament>(
+      fetch(`/api/tournaments/${tournamentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  deleteTournament: (tournamentId: string) =>
+    parseResponse<Tournament>(
+      fetch(`/api/tournaments/${tournamentId}`, {
+        method: "DELETE",
+      }),
+    ),
+  getEvents: (tournamentId?: string | null) =>
+    parseResponse<PlannerEventSummary[]>(fetch(withTournamentQuery("/api/events", tournamentId))),
+  getActivations: (tournamentId?: string | null) =>
+    parseResponse<Activation[]>(fetch(withTournamentQuery("/api/activations", tournamentId))),
   createActivation: (payload: {
     name: string;
+    tournamentId?: string;
     fileName?: string;
     mimeType?: string;
     sizeBytes?: number;
@@ -240,7 +313,7 @@ export const api = {
     tags?: string[];
   }) =>
     parseResponse<Activation>(
-      fetch("/api/activations", {
+      fetch(withTournamentQuery("/api/activations", payload.tournamentId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -270,20 +343,22 @@ export const api = {
         method: "DELETE",
       }),
     ),
-  uploadActivation: async (file: File, tags: string[]) => {
+  uploadActivation: async (file: File, tags: string[], tournamentId?: string | null) => {
     const data = new FormData();
     data.append("file", file);
     data.append("tags", tags.join(","));
     return parseResponse<Activation>(
-      fetch("/api/activations/upload", {
+      fetch(withTournamentQuery("/api/activations/upload", tournamentId), {
         method: "POST",
         body: data,
       }),
     );
   },
-  getVenues: () => parseResponse<Venue[]>(fetch("/api/venues")),
+  getVenues: (tournamentId?: string | null) =>
+    parseResponse<Venue[]>(fetch(withTournamentQuery("/api/venues", tournamentId))),
   createVenue: (payload: {
     name: string;
+    tournamentId?: string;
     city?: string;
     address?: string;
     tech?: {
@@ -299,15 +374,15 @@ export const api = {
     };
   }) =>
     parseResponse<Venue>(
-      fetch("/api/venues", {
+      fetch(withTournamentQuery("/api/venues", payload.tournamentId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }),
     ),
-  createPlannerEvent: (payload: { name?: string; match?: MatchInfo }) =>
+  createPlannerEvent: (payload: { name?: string; match?: MatchInfo; tournamentId?: string }) =>
     parseResponse<CueSheetSnapshot>(
-      fetch("/api/events", {
+      fetch(withTournamentQuery("/api/events", payload.tournamentId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

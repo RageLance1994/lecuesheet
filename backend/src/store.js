@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, "..", "data");
 const DATA_FILE = path.join(DATA_DIR, "cuesheet.json");
+const DEFAULT_TOURNAMENT_ID = "test-tournament";
 
 function createDefaultMatchTeam() {
   return {
@@ -32,9 +33,9 @@ function createDefaultMatchInfo() {
 
 export const PHASES = [
   { key: "GATES_OPEN", label: "Gates Open", start: "13:00:00" },
-  { key: "KICK_OFF", label: "Kick Off", start: "15:00:00" },
+  { key: "KICK_OFF", label: "Kick Off (Local Time)", start: "15:00:00" },
   { key: "HT_HALF_TIME", label: "HT-Half Time", start: "15:45:00" },
-  { key: "SECOND_HALF_KICK_OFF", label: "2nd Half Kick Off", start: "16:00:00" },
+  { key: "SECOND_HALF_KICK_OFF", label: "2nd Half Kick Off (Local Time)", start: "16:00:00" },
   { key: "FULL_TIME", label: "Full Time", start: "16:45:00" },
 ];
 
@@ -52,6 +53,7 @@ const DEFAULT_STATE = {
   events: [],
   venues: [],
   activations: [],
+  tournaments: [],
 };
 
 function ensureStorage() {
@@ -73,6 +75,11 @@ function sanitizeText(value) {
 function sanitizeOptionalText(value) {
   const text = sanitizeText(value);
   return text || null;
+}
+
+function sanitizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => sanitizeText(item)).filter(Boolean);
 }
 
 function normalizeMatchTeam(team) {
@@ -174,6 +181,7 @@ function normalizeVenue(venue) {
   const source = venue && typeof venue === "object" ? venue : {};
   return {
     id: sanitizeText(source.id) || randomUUID(),
+    tournamentId: sanitizeOptionalText(source.tournamentId),
     name: sanitizeText(source.name) || "Untitled Venue",
     city: sanitizeOptionalText(source.city),
     address: sanitizeOptionalText(source.address),
@@ -190,6 +198,7 @@ function normalizeActivation(activation) {
     : [];
   return {
     id: sanitizeText(source.id) || randomUUID(),
+    tournamentId: sanitizeOptionalText(source.tournamentId),
     name: sanitizeText(source.name) || "Untitled Activation",
     fileName: sanitizeOptionalText(source.fileName),
     mimeType: sanitizeOptionalText(source.mimeType),
@@ -288,6 +297,7 @@ function pushVersion(record, entry) {
 
 function createEventRecord({
   id,
+  tournamentId,
   name,
   metadata,
   rows,
@@ -301,6 +311,7 @@ function createEventRecord({
   );
   return {
     id: id || randomUUID(),
+    tournamentId: sanitizeOptionalText(tournamentId),
     name: sanitizeText(name) || safeMetadata.match.matchId || "Untitled Event",
     createdAt: createdAt || nowIso(),
     updatedAt: updatedAt || nowIso(),
@@ -316,6 +327,7 @@ function normalizeEventRecord(record) {
   }
   return createEventRecord({
     id: record.id,
+    tournamentId: record.tournamentId,
     name: record.name,
     metadata: record.metadata,
     rows: record.rows,
@@ -325,6 +337,52 @@ function normalizeEventRecord(record) {
   });
 }
 
+function normalizeTournament(tournament) {
+  const source = tournament && typeof tournament === "object" ? tournament : {};
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    name: sanitizeText(source.name) || "Untitled Tournament",
+    startDate: sanitizeOptionalText(source.startDate),
+    endDate: sanitizeOptionalText(source.endDate),
+    logoUrl: sanitizeOptionalText(source.logoUrl),
+    keyPeople: sanitizeStringArray(source.keyPeople),
+    matchesCount: Number.isFinite(Number(source.matchesCount)) ? Number(source.matchesCount) : null,
+    format: sanitizeOptionalText(source.format),
+    teamsCount: Number.isFinite(Number(source.teamsCount)) ? Number(source.teamsCount) : null,
+    hostCountries: sanitizeStringArray(source.hostCountries),
+    createdAt: source.createdAt || nowIso(),
+    updatedAt: source.updatedAt || nowIso(),
+  };
+}
+
+function createDefaultTournament() {
+  return normalizeTournament({
+    id: DEFAULT_TOURNAMENT_ID,
+    name: "Test Tournament",
+    format: "Eliminazione diretta",
+  });
+}
+
+function ensureTournamentList(tournaments) {
+  if (!Array.isArray(tournaments) || tournaments.length === 0) {
+    return [createDefaultTournament()];
+  }
+  return tournaments.map((item) => normalizeTournament(item));
+}
+
+function resolveTournamentId(state, requestedTournamentId = null) {
+  const tournaments = ensureTournamentList(state.tournaments);
+  const requested = sanitizeText(requestedTournamentId);
+  if (requested && tournaments.some((item) => item.id === requested)) {
+    return requested;
+  }
+  return tournaments[0]?.id ?? DEFAULT_TOURNAMENT_ID;
+}
+
+function withTournamentFallback(itemTournamentId, fallbackTournamentId) {
+  return sanitizeText(itemTournamentId) || fallbackTournamentId;
+}
+
 function migrateLegacyState(parsed) {
   const metadata = normalizeMetadata(parsed?.metadata);
   const rows = Array.isArray(parsed?.events) ? parsed.events : [];
@@ -332,12 +390,18 @@ function migrateLegacyState(parsed) {
   const legacyId = sanitizeText(parsed?.legacyEventId) || "legacy-default-event";
   const record = createEventRecord({
     id: legacyId,
+    tournamentId: DEFAULT_TOURNAMENT_ID,
     name: metadata.match.matchId || metadata.name,
     metadata,
     rows,
     versions,
   });
-  return { events: [record], venues: [], activations: [] };
+  return {
+    events: [record],
+    venues: [],
+    activations: [],
+    tournaments: [createDefaultTournament()],
+  };
 }
 
 function normalizeState(parsed) {
@@ -346,22 +410,26 @@ function normalizeState(parsed) {
   }
 
   if (Array.isArray(parsed.events) && parsed.events.length > 0 && parsed.events[0]?.rows) {
+    const tournaments = ensureTournamentList(parsed.tournaments);
     return {
       events: parsed.events.map((eventRecord) => normalizeEventRecord(eventRecord)),
       venues: Array.isArray(parsed.venues) ? parsed.venues.map((venue) => normalizeVenue(venue)) : [],
       activations: Array.isArray(parsed.activations)
         ? parsed.activations.map((activation) => normalizeActivation(activation))
         : [],
+      tournaments,
     };
   }
 
   if (Array.isArray(parsed.events) && parsed.events.length === 0 && !parsed.metadata) {
+    const tournaments = ensureTournamentList(parsed.tournaments);
     return {
       events: [],
       venues: Array.isArray(parsed.venues) ? parsed.venues.map((venue) => normalizeVenue(venue)) : [],
       activations: Array.isArray(parsed.activations)
         ? parsed.activations.map((activation) => normalizeActivation(activation))
         : [],
+      tournaments,
     };
   }
 
@@ -406,6 +474,7 @@ function snapshotFromRecord(record) {
 function plannerEventSummaryFromRecord(record) {
   return {
     id: record.id,
+    tournamentId: sanitizeOptionalText(record.tournamentId),
     name: record.name,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -416,23 +485,35 @@ function plannerEventSummaryFromRecord(record) {
   };
 }
 
-export function listPlannerEvents() {
+export function listPlannerEvents(tournamentId = null) {
   const state = readState();
+  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+  const fallbackTournamentId = resolveTournamentId(state, null);
   return state.events
+    .filter(
+      (record) =>
+        withTournamentFallback(record.tournamentId, fallbackTournamentId) === selectedTournamentId,
+    )
     .map((record) => plannerEventSummaryFromRecord(record))
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
-export function listVenues() {
+export function listVenues(tournamentId = null) {
   const state = readState();
+  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+  const fallbackTournamentId = resolveTournamentId(state, null);
   return (state.venues ?? [])
+    .filter(
+      (venue) => withTournamentFallback(venue.tournamentId, fallbackTournamentId) === selectedTournamentId,
+    )
     .map((venue) => normalizeVenue(venue))
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
-export function createVenue(payload, actor) {
+export function createVenue(payload, actor, tournamentId = null) {
   const state = readState();
-  const next = normalizeVenue(payload);
+  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+  const next = normalizeVenue({ ...payload, tournamentId: selectedTournamentId });
   next.updatedAt = nowIso();
   next.createdAt = next.createdAt || next.updatedAt;
   state.venues = [...(state.venues ?? []), next];
@@ -440,16 +521,23 @@ export function createVenue(payload, actor) {
   return next;
 }
 
-export function listActivations() {
+export function listActivations(tournamentId = null) {
   const state = readState();
+  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+  const fallbackTournamentId = resolveTournamentId(state, null);
   return (state.activations ?? [])
+    .filter(
+      (activation) =>
+        withTournamentFallback(activation.tournamentId, fallbackTournamentId) === selectedTournamentId,
+    )
     .map((activation) => normalizeActivation(activation))
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
-export function createActivation(payload, actor) {
+export function createActivation(payload, actor, tournamentId = null) {
   const state = readState();
-  const next = normalizeActivation(payload);
+  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+  const next = normalizeActivation({ ...payload, tournamentId: selectedTournamentId });
   next.updatedAt = nowIso();
   next.createdAt = next.createdAt || next.updatedAt;
   state.activations = [...(state.activations ?? []), next];
@@ -494,12 +582,14 @@ export function getPlannerEventSnapshot(eventId) {
 
 export function createPlannerEvent(payload, actor) {
   const state = readState();
+  const selectedTournamentId = resolveTournamentId(state, payload?.tournamentId ?? null);
   const baseName = sanitizeText(payload?.name);
   const metadata = normalizeMetadata({
     name: "Live Engine Cue Sheet",
     match: payload?.match ?? {},
   });
   const record = createEventRecord({
+    tournamentId: selectedTournamentId,
     name: baseName || metadata.match.matchId || `Event ${state.events.length + 1}`,
     metadata,
     rows: [],
@@ -561,6 +651,64 @@ export function deletePlannerEvent(eventId, actor) {
   const [removed] = state.events.splice(index, 1);
   writeState(state);
   return plannerEventSummaryFromRecord(removed);
+}
+
+export function listTournaments() {
+  const state = readState();
+  return ensureTournamentList(state.tournaments).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export function createTournament(payload, actor) {
+  const state = readState();
+  const next = normalizeTournament(payload);
+  next.updatedAt = nowIso();
+  next.createdAt = next.createdAt || next.updatedAt;
+  state.tournaments = [...ensureTournamentList(state.tournaments), next];
+  writeState(state);
+  return next;
+}
+
+export function updateTournament(tournamentId, payload, actor) {
+  const state = readState();
+  const tournaments = ensureTournamentList(state.tournaments);
+  const index = tournaments.findIndex((item) => item.id === tournamentId);
+  if (index === -1) return null;
+
+  const current = tournaments[index];
+  const merged = normalizeTournament({
+    ...current,
+    ...payload,
+    id: current.id,
+    createdAt: current.createdAt,
+  });
+  merged.updatedAt = nowIso();
+
+  tournaments[index] = merged;
+  state.tournaments = tournaments;
+  writeState(state);
+  return merged;
+}
+
+export function deleteTournament(tournamentId, actor) {
+  const state = readState();
+  const tournaments = ensureTournamentList(state.tournaments);
+  const fallbackTournamentId = resolveTournamentId({ ...state, tournaments }, null);
+  const index = tournaments.findIndex((item) => item.id === tournamentId);
+  if (index === -1) return null;
+
+  const [removed] = tournaments.splice(index, 1);
+  state.events = state.events.filter(
+    (record) => withTournamentFallback(record.tournamentId, fallbackTournamentId) !== tournamentId,
+  );
+  state.venues = state.venues.filter(
+    (item) => withTournamentFallback(item.tournamentId, fallbackTournamentId) !== tournamentId,
+  );
+  state.activations = state.activations.filter(
+    (item) => withTournamentFallback(item.tournamentId, fallbackTournamentId) !== tournamentId,
+  );
+  state.tournaments = tournaments.length > 0 ? tournaments : [createDefaultTournament()];
+  writeState(state);
+  return removed;
 }
 
 export function replaceCuesheet(eventId, { rows, sourceFile, actor }) {
@@ -784,7 +932,7 @@ export function getVersions(eventId, limit = 100) {
 }
 
 export function ensurePlannerEvent(actor, payload = {}) {
-  const existing = listPlannerEvents();
+  const existing = listPlannerEvents(payload?.tournamentId ?? null);
   if (existing.length > 0) return existing[0].id;
   const created = createPlannerEvent(payload, actor);
   return created.event.id;

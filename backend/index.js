@@ -9,6 +9,10 @@ import { createServer } from "node:http";
 import { z } from "zod";
 import {
   listPlannerEvents,
+  listTournaments,
+  createTournament,
+  updateTournament,
+  deleteTournament,
   getPlannerEventSnapshot,
   createPlannerEvent,
   updatePlannerEvent,
@@ -107,6 +111,7 @@ const plannerEventSchema = z
   .object({
     name: z.string().optional(),
     match: matchInfoSchema.optional(),
+    tournamentId: z.string().optional(),
   })
   .strict();
 const plannerEventPatchSchema = plannerEventSchema.partial();
@@ -114,6 +119,7 @@ const plannerEventPatchSchema = plannerEventSchema.partial();
 const venueSchema = z
   .object({
     name: z.string().min(1),
+    tournamentId: z.string().optional(),
     city: z.string().optional(),
     address: z.string().optional(),
     tech: z
@@ -158,6 +164,7 @@ const venueSchema = z
 const activationSchema = z
   .object({
     name: z.string().min(1),
+    tournamentId: z.string().optional(),
     fileName: z.string().optional(),
     mimeType: z.string().optional(),
     sizeBytes: z.number().optional(),
@@ -167,6 +174,22 @@ const activationSchema = z
   .strict();
 
 const activationPatchSchema = activationSchema.partial();
+
+const tournamentSchema = z
+  .object({
+    name: z.string().min(1),
+    startDate: optionalTextSchema,
+    endDate: optionalTextSchema,
+    logoUrl: optionalTextSchema,
+    keyPeople: z.array(z.string()).optional(),
+    matchesCount: z.number().int().nonnegative().nullable().optional(),
+    format: optionalTextSchema,
+    teamsCount: z.number().int().nonnegative().nullable().optional(),
+    hostCountries: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const tournamentPatchSchema = tournamentSchema.partial();
 
 function actorFromRequest(req) {
   return req.header("x-user")?.trim() || "operator";
@@ -215,12 +238,47 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
-app.get("/api/events", (_req, res) => {
-  res.json(listPlannerEvents());
+app.get("/api/tournaments", (_req, res) => {
+  res.json(listTournaments());
 });
 
-app.get("/api/venues", (_req, res) => {
-  res.json(listVenues());
+app.post("/api/tournaments", (req, res) => {
+  const parsed = tournamentSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json(parsed.error.flatten());
+  }
+  const created = createTournament(parsed.data, actorFromRequest(req));
+  return res.status(201).json(created);
+});
+
+app.patch("/api/tournaments/:tournamentId", (req, res) => {
+  const parsed = tournamentPatchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json(parsed.error.flatten());
+  }
+  const updated = updateTournament(req.params.tournamentId, parsed.data, actorFromRequest(req));
+  if (!updated) {
+    return res.status(404).json({ error: "Tournament not found" });
+  }
+  return res.json(updated);
+});
+
+app.delete("/api/tournaments/:tournamentId", (req, res) => {
+  const removed = deleteTournament(req.params.tournamentId, actorFromRequest(req));
+  if (!removed) {
+    return res.status(404).json({ error: "Tournament not found" });
+  }
+  return res.json(removed);
+});
+
+app.get("/api/events", (req, res) => {
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  res.json(listPlannerEvents(tournamentId));
+});
+
+app.get("/api/venues", (req, res) => {
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  res.json(listVenues(tournamentId));
 });
 
 app.post("/api/venues", (req, res) => {
@@ -228,12 +286,14 @@ app.post("/api/venues", (req, res) => {
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
-  const venue = createVenue(parsed.data, actorFromRequest(req));
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  const venue = createVenue(parsed.data, actorFromRequest(req), tournamentId ?? parsed.data.tournamentId);
   return res.status(201).json(venue);
 });
 
-app.get("/api/activations", (_req, res) => {
-  res.json(listActivations());
+app.get("/api/activations", (req, res) => {
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  res.json(listActivations(tournamentId));
 });
 
 app.post("/api/activations", (req, res) => {
@@ -241,7 +301,12 @@ app.post("/api/activations", (req, res) => {
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
-  const activation = createActivation(parsed.data, actorFromRequest(req));
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  const activation = createActivation(
+    parsed.data,
+    actorFromRequest(req),
+    tournamentId ?? parsed.data.tournamentId,
+  );
   return res.status(201).json(activation);
 });
 
@@ -284,6 +349,7 @@ app.post("/api/activations/upload", upload.single("file"), (req, res) => {
       tags,
     },
     actorFromRequest(req),
+    typeof req.query.tournamentId === "string" ? req.query.tournamentId : null,
   );
 
   safeUnlink(req.file.path);
@@ -296,7 +362,11 @@ app.post("/api/events", (req, res) => {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const created = createPlannerEvent(parsed.data, actorFromRequest(req));
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  const created = createPlannerEvent(
+    { ...parsed.data, tournamentId: tournamentId ?? parsed.data.tournamentId },
+    actorFromRequest(req),
+  );
   broadcastSnapshot(created.event.id);
   return res.status(201).json(created);
 });
