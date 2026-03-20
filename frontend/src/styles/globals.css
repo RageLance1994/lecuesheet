@@ -155,9 +155,48 @@ h3 {
   color: #e6f0ff;
   border-radius: 10px;
   font: inherit;
-  padding: 0.52rem 0.6rem;
+  padding: 0.36rem 0.5rem;
   width: 100%;
   outline: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.45rem;
+  row-gap: 0.15rem;
+  align-items: center;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-tournament-switch__select-main {
+  grid-column: 1;
+  grid-row: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.sidebar-tournament-switch__select-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-tournament-switch__select-meta {
+  grid-column: 1;
+  grid-row: 2;
+  font-size: 0.68rem;
+  color: #9db5d8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-tournament-switch__select > i {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
 }
 
 .sidebar-tournament-switch__menu-trigger {
@@ -184,6 +223,46 @@ h3 {
   display: grid;
   gap: 0.2rem;
   z-index: 20;
+}
+
+.sidebar-tournament-switch__selector-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(106, 168, 255, 0.22);
+  background: #0f1624;
+  padding: 0.3rem;
+  display: grid;
+  gap: 0.2rem;
+  z-index: 21;
+}
+
+.sidebar-tournament-switch__selector-item {
+  border: 1px solid rgba(106, 168, 255, 0.18);
+  border-radius: 8px;
+  background: transparent;
+  color: #dbe9ff;
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.34rem 0.44rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-tournament-switch__selector-item:hover {
+  background: rgba(106, 168, 255, 0.1);
+}
+
+.sidebar-tournament-switch__selector-item.is-selected {
+  border-color: rgba(106, 168, 255, 0.44);
+  background: rgba(106, 168, 255, 0.12);
+}
+
+.sidebar-tournament-switch__selector-item span {
+  font-size: 0.68rem;
+  color: #9fb9de;
 }
 
 .sidebar-tournament-switch__menu button {

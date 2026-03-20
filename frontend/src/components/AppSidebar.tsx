@@ -24,15 +24,28 @@ export function AppSidebar({
   onEditTournament,
   onDeleteTournament,
 }: Props) {
+  const [selectorOpen, setSelectorOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedTournament =
     tournaments.find((item) => item.id === selectedTournamentId) ?? tournaments[0] ?? null;
+  const selectedMeta = selectedTournament
+    ? [
+      selectedTournament.format || null,
+      selectedTournament.startDate && selectedTournament.endDate
+        ? `${selectedTournament.startDate} - ${selectedTournament.endDate}`
+        : selectedTournament.startDate || selectedTournament.endDate || null,
+      selectedTournament.teamsCount ? `${selectedTournament.teamsCount} teams` : null,
+    ]
+      .filter(Boolean)
+      .join(" | ")
+    : "";
 
   useEffect(() => {
     function onMouseDown(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setMenuOpen(false);
+        setSelectorOpen(false);
       }
     }
     document.addEventListener("mousedown", onMouseDown);
@@ -48,26 +61,64 @@ export function AppSidebar({
       <div className="sidebar-tournament-switch" ref={menuRef}>
         <label className="sidebar-tournament-switch__label">Torneo attivo</label>
         <div className="sidebar-tournament-switch__row">
-          <select
+          <button
+            type="button"
             className="sidebar-tournament-switch__select"
-            value={selectedTournamentId}
-            onChange={(event) => onSelectTournament(event.target.value)}
+            onClick={() => {
+              setMenuOpen(false);
+              setSelectorOpen((open) => !open);
+            }}
           >
-            {tournaments.map((tournament) => (
-              <option key={tournament.id} value={tournament.id}>
-                {tournament.name}
-              </option>
-            ))}
-          </select>
+            <span className="sidebar-tournament-switch__select-main">
+              <i className="fa-solid fa-trophy" />
+              <span>{selectedTournament?.name || "Select tournament"}</span>
+            </span>
+            <span className="sidebar-tournament-switch__select-meta">{selectedMeta || "No details"}</span>
+            <i className={`fa-solid ${selectorOpen ? "fa-chevron-up" : "fa-chevron-down"}`} />
+          </button>
           <button
             type="button"
             className="sidebar-tournament-switch__menu-trigger"
             title="Azioni torneo"
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={() => {
+              setSelectorOpen(false);
+              setMenuOpen((open) => !open);
+            }}
           >
             <i className="fa-solid fa-ellipsis" />
           </button>
         </div>
+        {selectorOpen ? (
+          <div className="sidebar-tournament-switch__selector-menu">
+            {tournaments.map((tournament) => {
+              const isSelected = tournament.id === selectedTournamentId;
+              const meta = [
+                tournament.format || null,
+                tournament.startDate && tournament.endDate
+                  ? `${tournament.startDate} - ${tournament.endDate}`
+                  : tournament.startDate || tournament.endDate || null,
+                tournament.matchesCount ? `${tournament.matchesCount} matches` : null,
+                tournament.teamsCount ? `${tournament.teamsCount} teams` : null,
+              ]
+                .filter(Boolean)
+                .join(" | ");
+              return (
+                <button
+                  key={tournament.id}
+                  type="button"
+                  className={`sidebar-tournament-switch__selector-item ${isSelected ? "is-selected" : ""}`}
+                  onClick={() => {
+                    onSelectTournament(tournament.id);
+                    setSelectorOpen(false);
+                  }}
+                >
+                  <strong>{tournament.name}</strong>
+                  <span>{meta || "No details"}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         {menuOpen ? (
           <div className="sidebar-tournament-switch__menu">
             <button
