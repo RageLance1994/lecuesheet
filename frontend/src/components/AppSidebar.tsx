@@ -29,17 +29,6 @@ export function AppSidebar({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedTournament =
     tournaments.find((item) => item.id === selectedTournamentId) ?? tournaments[0] ?? null;
-  const selectedMeta = selectedTournament
-    ? [
-      selectedTournament.format || null,
-      selectedTournament.startDate && selectedTournament.endDate
-        ? `${selectedTournament.startDate} - ${selectedTournament.endDate}`
-        : selectedTournament.startDate || selectedTournament.endDate || null,
-      selectedTournament.teamsCount ? `${selectedTournament.teamsCount} teams` : null,
-    ]
-      .filter(Boolean)
-      .join(" | ")
-    : "";
 
   useEffect(() => {
     function onMouseDown(event: MouseEvent) {
@@ -83,8 +72,9 @@ export function AppSidebar({
               )}
               <span>{selectedTournament?.name || "Select tournament"}</span>
             </span>
-            <span className="sidebar-tournament-switch__select-meta">{selectedMeta || "No details"}</span>
-            <i className={`fa-solid ${selectorOpen ? "fa-chevron-up" : "fa-chevron-down"}`} />
+            <i
+              className={`fa-solid ${selectorOpen ? "fa-chevron-up" : "fa-chevron-down"} sidebar-tournament-switch__select-caret`}
+            />
           </button>
           <button
             type="button"
