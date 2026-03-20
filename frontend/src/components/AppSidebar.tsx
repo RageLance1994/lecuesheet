@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { Tournament } from "../lib/api";
 
 type ActiveSection = "events" | "activations" | "venues";
@@ -23,10 +24,89 @@ export function AppSidebar({
   onEditTournament,
   onDeleteTournament,
 }: Props) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const selectedTournament =
+    tournaments.find((item) => item.id === selectedTournamentId) ?? tournaments[0] ?? null;
+
+  useEffect(() => {
+    function onMouseDown(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, []);
+
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
         <img className="sidebar-brand__logo" src="/mock_liveengine%20logo.png" alt="Live Engine" />
+      </div>
+
+      <div className="sidebar-tournament-switch" ref={menuRef}>
+        <label className="sidebar-tournament-switch__label">Torneo attivo</label>
+        <div className="sidebar-tournament-switch__row">
+          <select
+            className="sidebar-tournament-switch__select"
+            value={selectedTournamentId}
+            onChange={(event) => onSelectTournament(event.target.value)}
+          >
+            {tournaments.map((tournament) => (
+              <option key={tournament.id} value={tournament.id}>
+                {tournament.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="sidebar-tournament-switch__menu-trigger"
+            title="Azioni torneo"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <i className="fa-solid fa-ellipsis" />
+          </button>
+        </div>
+        {menuOpen ? (
+          <div className="sidebar-tournament-switch__menu">
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                onCreateTournament();
+              }}
+            >
+              <i className="fa-solid fa-plus" />
+              <span>Nuovo torneo</span>
+            </button>
+            <button
+              type="button"
+              disabled={!selectedTournament}
+              onClick={() => {
+                if (!selectedTournament) return;
+                setMenuOpen(false);
+                onEditTournament(selectedTournament);
+              }}
+            >
+              <i className="fa-solid fa-pen-to-square" />
+              <span>Modifica torneo</span>
+            </button>
+            <button
+              type="button"
+              className="is-danger"
+              disabled={!selectedTournament}
+              onClick={() => {
+                if (!selectedTournament) return;
+                setMenuOpen(false);
+                onDeleteTournament(selectedTournament);
+              }}
+            >
+              <i className="fa-solid fa-trash" />
+              <span>Elimina torneo</span>
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <nav className="sidebar-nav">
@@ -55,50 +135,6 @@ export function AppSidebar({
           <span>Venues</span>
         </button>
       </nav>
-
-      <div className="sidebar-tournaments">
-        <div className="sidebar-tournaments__head">
-          <span>Tornei</span>
-          <button type="button" className="sidebar-tournaments__create" onClick={onCreateTournament}>
-            <i className="fa-solid fa-plus" />
-          </button>
-        </div>
-        <div className="sidebar-tournaments__list">
-          {tournaments.map((tournament) => {
-            const isSelected = selectedTournamentId === tournament.id;
-            return (
-              <div key={tournament.id} className="sidebar-tournament">
-                <div className={`sidebar-tournament__row ${isSelected ? "is-selected" : ""}`}>
-                  <button
-                    type="button"
-                    className="sidebar-tournament__toggle"
-                    onClick={() => onSelectTournament(tournament.id)}
-                  >
-                    <i className="fa-solid fa-trophy" />
-                    <span>{tournament.name}</span>
-                  </button>
-                  <div className="sidebar-tournament__actions">
-                    <button
-                      type="button"
-                      title="Edit tournament"
-                      onClick={() => onEditTournament(tournament)}
-                    >
-                      <i className="fa-solid fa-pen-to-square" />
-                    </button>
-                    <button
-                      type="button"
-                      title="Delete tournament"
-                      onClick={() => onDeleteTournament(tournament)}
-                    >
-                      <i className="fa-solid fa-trash" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
     </aside>
   );
 }

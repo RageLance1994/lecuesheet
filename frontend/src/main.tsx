@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { HardConfirmModal } from "./components/HardConfirmModal";
 import { App } from "./pages/App";
 import { EventsPage } from "./pages/EventsPage";
 import { ActivationsPage } from "./pages/ActivationsPage";
@@ -30,6 +31,7 @@ function RouterShell() {
   );
   const [editingTournamentId, setEditingTournamentId] = useState<string | null>(null);
   const [busyTournament, setBusyTournament] = useState(false);
+  const [deleteTournamentTarget, setDeleteTournamentTarget] = useState<Tournament | null>(null);
 
   useEffect(() => {
     if (window.location.pathname === "/") {
@@ -159,9 +161,7 @@ function RouterShell() {
     }
   }
 
-  async function deleteTournament(tournament: Tournament) {
-    const confirmed = window.confirm(`Delete tournament "${tournament.name}"?`);
-    if (!confirmed) return;
+  async function deleteTournamentNow(tournament: Tournament) {
     await api.deleteTournament(tournament.id);
     const rows = await api.getTournaments();
     setTournaments(rows);
@@ -197,9 +197,7 @@ function RouterShell() {
           onSelectTournament={selectTournament}
           onCreateTournament={openTournamentCreate}
           onEditTournament={openTournamentEdit}
-          onDeleteTournament={(tournament) => {
-            void deleteTournament(tournament);
-          }}
+          onDeleteTournament={setDeleteTournamentTarget}
         />
         <TournamentWizardModal
           open={tournamentWizardOpen}
@@ -226,9 +224,7 @@ function RouterShell() {
           onSelectTournament={selectTournament}
           onCreateTournament={openTournamentCreate}
           onEditTournament={openTournamentEdit}
-          onDeleteTournament={(tournament) => {
-            void deleteTournament(tournament);
-          }}
+          onDeleteTournament={setDeleteTournamentTarget}
         />
         <TournamentWizardModal
           open={tournamentWizardOpen}
@@ -255,9 +251,7 @@ function RouterShell() {
           onSelectTournament={selectTournament}
           onCreateTournament={openTournamentCreate}
           onEditTournament={openTournamentEdit}
-          onDeleteTournament={(tournament) => {
-            void deleteTournament(tournament);
-          }}
+          onDeleteTournament={setDeleteTournamentTarget}
         />
         <TournamentWizardModal
           open={tournamentWizardOpen}
@@ -283,9 +277,7 @@ function RouterShell() {
         onSelectTournament={selectTournament}
         onCreateTournament={openTournamentCreate}
         onEditTournament={openTournamentEdit}
-        onDeleteTournament={(tournament) => {
-          void deleteTournament(tournament);
-        }}
+        onDeleteTournament={setDeleteTournamentTarget}
       />
       <TournamentWizardModal
         open={tournamentWizardOpen}
@@ -296,6 +288,31 @@ function RouterShell() {
         onClose={() => setTournamentWizardOpen(false)}
         onSubmit={() => {
           void submitTournamentWizard();
+        }}
+      />
+      <HardConfirmModal
+        open={Boolean(deleteTournamentTarget)}
+        busy={busyTournament}
+        title="Elimina torneo"
+        description={
+          deleteTournamentTarget
+            ? `Confermi eliminazione torneo \"${deleteTournamentTarget.name}\"? Verranno rimossi anche Events, Activations e Venues collegati.`
+            : "Confermi eliminazione torneo?"
+        }
+        actionLabel="Delete Tournament"
+        onCancel={() => {
+          if (busyTournament) return;
+          setDeleteTournamentTarget(null);
+        }}
+        onApprove={async () => {
+          if (!deleteTournamentTarget) return;
+          setBusyTournament(true);
+          try {
+            await deleteTournamentNow(deleteTournamentTarget);
+            setDeleteTournamentTarget(null);
+          } finally {
+            setBusyTournament(false);
+          }
         }}
       />
     </>
