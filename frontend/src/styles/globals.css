@@ -165,7 +165,7 @@ h3 {
 
 .sidebar-tournament {
   border-bottom: 1px solid rgba(106, 168, 255, 0.16);
-  padding: 0.35rem 0;
+  padding: 0.18rem 0;
 }
 
 .sidebar-tournament__row {
@@ -177,20 +177,25 @@ h3 {
 }
 
 .sidebar-tournament__row.is-selected {
-  background: transparent;
+  background: rgba(106, 168, 255, 0.08);
+  border-radius: 9px;
 }
 
 .sidebar-tournament__toggle {
-  border: 0;
+  border: 1px solid rgba(106, 168, 255, 0.22);
+  border-radius: 8px;
   background: transparent;
   color: #dce9ff;
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
   font: inherit;
+  line-height: 1.1;
   text-align: left;
   cursor: pointer;
   min-width: 0;
+  padding: 0.4rem 0.5rem;
+  outline: none;
 }
 
 .sidebar-tournament__toggle span {
@@ -203,6 +208,7 @@ h3 {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
+  padding-right: 0.1rem;
 }
 
 .sidebar-tournament__actions button {
@@ -215,31 +221,8 @@ h3 {
   cursor: pointer;
   display: grid;
   place-items: center;
-}
-
-.sidebar-tournament__menu {
-  display: grid;
-  gap: 0.2rem;
-  padding: 0.2rem 0.2rem 0.12rem 1.15rem;
-}
-
-.sidebar-tournament__menu button {
-  border: 1px solid rgba(106, 168, 255, 0.18);
-  border-radius: 8px;
-  background: transparent;
-  color: #b8cef3;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  font: inherit;
-  padding: 0.34rem 0.52rem;
-  cursor: pointer;
-  text-align: left;
-}
-
-.sidebar-tournament__menu button:hover {
-  background: rgba(106, 168, 255, 0.08);
-  color: #e4efff;
+  outline: none;
+  line-height: 1;
 }
 
 .main-content {

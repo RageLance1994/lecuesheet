@@ -23,11 +23,6 @@ export function AppSidebar({
   onEditTournament,
   onDeleteTournament,
 }: Props) {
-  function goTo(path: string, tournamentId: string) {
-    onSelectTournament(tournamentId);
-    onNavigate(`${path}?tournament=${encodeURIComponent(tournamentId)}`);
-  }
-
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -74,8 +69,12 @@ export function AppSidebar({
             return (
               <div key={tournament.id} className="sidebar-tournament">
                 <div className={`sidebar-tournament__row ${isSelected ? "is-selected" : ""}`}>
-                  <button type="button" className="sidebar-tournament__toggle" onClick={() => onSelectTournament(tournament.id)}>
-                    <i className="fa-solid fa-chevron-right" />
+                  <button
+                    type="button"
+                    className="sidebar-tournament__toggle"
+                    onClick={() => onSelectTournament(tournament.id)}
+                  >
+                    <i className="fa-solid fa-trophy" />
                     <span>{tournament.name}</span>
                   </button>
                   <div className="sidebar-tournament__actions">
@@ -94,20 +93,6 @@ export function AppSidebar({
                       <i className="fa-solid fa-trash" />
                     </button>
                   </div>
-                </div>
-                <div className="sidebar-tournament__menu">
-                  <button type="button" onClick={() => goTo("/events", tournament.id)}>
-                    <i className="fa-solid fa-calendar-days" />
-                    <span>Events</span>
-                  </button>
-                  <button type="button" onClick={() => goTo("/activations", tournament.id)}>
-                    <i className="fa-solid fa-clapperboard" />
-                    <span>Activations</span>
-                  </button>
-                  <button type="button" onClick={() => goTo("/venues", tournament.id)}>
-                    <i className="fa-solid fa-location-dot" />
-                    <span>Venues</span>
-                  </button>
                 </div>
               </div>
             );
