@@ -3,7 +3,7 @@ import { AppSidebar } from "../components/AppSidebar";
 import { UnsavedChangesModal } from "../components/UnsavedChangesModal";
 import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
-import { api, type Tournament, type Venue } from "../lib/api";
+import { api, hasPrivilege, type Tournament, type UserAccount, type Venue } from "../lib/api";
 
 type Props = {
   onNavigate: (path: string) => void;
@@ -13,6 +13,14 @@ type Props = {
   onCreateTournament: () => void;
   onEditTournament: (tournament: Tournament) => void;
   onDeleteTournament: (tournament: Tournament) => void;
+  currentUser: UserAccount | null;
+  pageAccess: {
+    events: boolean;
+    activations: boolean;
+    venues: boolean;
+    personnel: boolean;
+    users: boolean;
+  };
 };
 
 type ScreenDraft = {
@@ -102,6 +110,8 @@ export function VenuesPage({
   onCreateTournament,
   onEditTournament,
   onDeleteTournament,
+  currentUser,
+  pageAccess,
 }: Props) {
   const [venues, setVenues] = useState<Venue[]>([]);
   const [busy, setBusy] = useState(false);
@@ -218,6 +228,7 @@ export function VenuesPage({
         onCreateTournament={onCreateTournament}
         onEditTournament={onEditTournament}
         onDeleteTournament={onDeleteTournament}
+        pageAccess={pageAccess}
       />
 
       <main className="main-content">
@@ -225,7 +236,12 @@ export function VenuesPage({
           <CardHeader className="table-card__header">
             <div className="table-card__titlebar">
               <CardTitle>Venues</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => setOpen(true)} disabled={busy}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setOpen(true)}
+                disabled={busy || !hasPrivilege(currentUser, "venues", "create")}
+              >
                 <i className="fa-solid fa-plus" />
                 <span>New Venue</span>
               </Button>

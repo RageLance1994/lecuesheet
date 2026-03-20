@@ -7,10 +7,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card"
 import {
   api,
   emptyMatchInfo,
+  hasPrivilege,
   matchInfoToDraft,
   type MatchInfoDraft,
   type PlannerEventSummary,
   type Tournament,
+  type UserAccount,
   type Venue,
 } from "../lib/api";
 
@@ -22,6 +24,14 @@ type Props = {
   onCreateTournament: () => void;
   onEditTournament: (tournament: Tournament) => void;
   onDeleteTournament: (tournament: Tournament) => void;
+  currentUser: UserAccount | null;
+  pageAccess: {
+    events: boolean;
+    activations: boolean;
+    venues: boolean;
+    personnel: boolean;
+    users: boolean;
+  };
 };
 
 function toMatchPayload(draft: MatchInfoDraft) {
@@ -54,6 +64,8 @@ export function EventsPage({
   onCreateTournament,
   onEditTournament,
   onDeleteTournament,
+  currentUser,
+  pageAccess,
 }: Props) {
   const [events, setEvents] = useState<PlannerEventSummary[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
@@ -163,6 +175,7 @@ export function EventsPage({
         onCreateTournament={onCreateTournament}
         onEditTournament={onEditTournament}
         onDeleteTournament={onDeleteTournament}
+        pageAccess={pageAccess}
       />
 
       <main className="main-content">
@@ -170,7 +183,12 @@ export function EventsPage({
           <CardHeader className="table-card__header">
             <div className="table-card__titlebar">
               <CardTitle>Events</CardTitle>
-              <Button variant="outline" size="sm" onClick={openCreateWizard} disabled={busy}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openCreateWizard}
+                disabled={busy || !hasPrivilege(currentUser, "events", "create")}
+              >
                 <i className="fa-solid fa-plus" />
                 <span>New Event</span>
               </Button>
@@ -226,6 +244,7 @@ export function EventsPage({
                             variant="outline"
                             size="icon"
                             title="Edit event"
+                            disabled={!hasPrivilege(currentUser, "events", "edit")}
                             onClick={(event) => {
                               event.stopPropagation();
                               openEditWizard(eventItem);
@@ -237,6 +256,7 @@ export function EventsPage({
                             variant="danger"
                             size="icon"
                             title="Delete event"
+                            disabled={!hasPrivilege(currentUser, "events", "delete")}
                             onClick={(event) => {
                               event.stopPropagation();
                               setDeleteEventId(eventItem.id);

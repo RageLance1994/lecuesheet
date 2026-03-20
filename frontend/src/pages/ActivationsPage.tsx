@@ -3,7 +3,7 @@ import { AppSidebar } from "../components/AppSidebar";
 import { UnsavedChangesModal } from "../components/UnsavedChangesModal";
 import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
-import { api, type Activation, type Tournament } from "../lib/api";
+import { api, hasPrivilege, type Activation, type Tournament, type UserAccount } from "../lib/api";
 
 type Props = {
   onNavigate: (path: string) => void;
@@ -13,6 +13,14 @@ type Props = {
   onCreateTournament: () => void;
   onEditTournament: (tournament: Tournament) => void;
   onDeleteTournament: (tournament: Tournament) => void;
+  currentUser: UserAccount | null;
+  pageAccess: {
+    events: boolean;
+    activations: boolean;
+    venues: boolean;
+    personnel: boolean;
+    users: boolean;
+  };
 };
 
 type ActivationSpecs = {
@@ -248,6 +256,8 @@ export function ActivationsPage({
   onCreateTournament,
   onEditTournament,
   onDeleteTournament,
+  currentUser,
+  pageAccess,
 }: Props) {
   const [activations, setActivations] = useState<Activation[]>([]);
   const [busy, setBusy] = useState(false);
@@ -404,6 +414,7 @@ export function ActivationsPage({
   }
 
   async function handleDeleteActivation(activationId: string) {
+    if (!hasPrivilege(currentUser, "activations", "delete")) return;
     const confirmed = window.confirm("Delete this activation?");
     if (!confirmed) return;
     setBusy(true);
@@ -472,7 +483,7 @@ export function ActivationsPage({
               size="icon"
               title="Edit activation"
               onClick={() => openWizardEdit(item)}
-              disabled={busy}
+              disabled={busy || !hasPrivilege(currentUser, "activations", "edit")}
             >
               <i className="fa-solid fa-pen-to-square" />
             </Button>
@@ -484,7 +495,7 @@ export function ActivationsPage({
               onClick={() => {
                 void handleDeleteActivation(item.id);
               }}
-              disabled={busy}
+              disabled={busy || !hasPrivilege(currentUser, "activations", "delete")}
             >
               <i className="fa-solid fa-trash" />
             </Button>
@@ -505,6 +516,7 @@ export function ActivationsPage({
         onCreateTournament={onCreateTournament}
         onEditTournament={onEditTournament}
         onDeleteTournament={onDeleteTournament}
+        pageAccess={pageAccess}
       />
 
       <main className="main-content">
@@ -522,7 +534,12 @@ export function ActivationsPage({
                   <i className={`fa-solid ${groupedView ? "fa-list" : "fa-folder-tree"}`} />
                   <span>{groupedView ? "Flat View" : "Grouped View"}</span>
                 </Button>
-                <Button variant="outline" size="sm" onClick={openWizardCreate} disabled={busy}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={openWizardCreate}
+                  disabled={busy || !hasPrivilege(currentUser, "activations", "create")}
+                >
                   <i className="fa-solid fa-plus" />
                   <span>Register Content</span>
                 </Button>

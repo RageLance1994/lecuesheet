@@ -11,8 +11,8 @@ import {
   emptyDraft,
 } from "../components/EventFormModal";
 import { HardConfirmModal } from "../components/HardConfirmModal";
-import { api } from "../lib/api";
-import type { Activation, CueEvent, CueSheetSnapshot, Tournament, Venue } from "../lib/api";
+import { api, hasPrivilege } from "../lib/api";
+import type { Activation, CueEvent, CueSheetSnapshot, Tournament, UserAccount, Venue } from "../lib/api";
 import { matchInfoToDraft } from "../lib/api";
 import { Button } from "../components/ui/Button";
 import {
@@ -45,6 +45,14 @@ type Props = {
   onCreateTournament: () => void;
   onEditTournament: (tournament: Tournament) => void;
   onDeleteTournament: (tournament: Tournament) => void;
+  currentUser: UserAccount | null;
+  pageAccess: {
+    events: boolean;
+    activations: boolean;
+    venues: boolean;
+    personnel: boolean;
+    users: boolean;
+  };
 };
 
 const initialConfirm: ConfirmState = {
@@ -188,6 +196,8 @@ export function App({
   onCreateTournament,
   onEditTournament,
   onDeleteTournament,
+  currentUser,
+  pageAccess,
 }: Props) {
   const [snapshot, setSnapshot] = useState<CueSheetSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
@@ -412,6 +422,7 @@ export function App({
         onCreateTournament={onCreateTournament}
         onEditTournament={onEditTournament}
         onDeleteTournament={onDeleteTournament}
+        pageAccess={pageAccess}
       />
 
       <main className="main-content">
@@ -538,7 +549,7 @@ export function App({
                     <button
                       type="button"
                       className="table-actions-menu__item"
-                      disabled={busy}
+                      disabled={busy || !hasPrivilege(currentUser, "cuesheet", "edit")}
                       onClick={() => {
                         openCreateModal();
                         setTableMenuOpen(false);
@@ -550,7 +561,7 @@ export function App({
                     <button
                       type="button"
                       className="table-actions-menu__item"
-                      disabled={busy}
+                      disabled={busy || !hasPrivilege(currentUser, "cuesheet", "import")}
                       onClick={() => {
                         requestConfirm(
                           "Import Context XLSX",
@@ -574,6 +585,7 @@ export function App({
                         type="file"
                         accept=".xlsx,.xls"
                         hidden
+                        disabled={!hasPrivilege(currentUser, "cuesheet", "import")}
                         onChange={(event) => {
                           const file = event.target.files?.[0];
                           if (!file) return;
@@ -622,8 +634,12 @@ export function App({
                   .filter((option) => visibleColumns[option.key])
                   .map((option) => option.key)}
                 scrollToEventId={selectedTimelineEventId}
-                onEdit={openEditModal}
+                onEdit={(event) => {
+                  if (!hasPrivilege(currentUser, "cuesheet", "edit")) return;
+                  openEditModal(event);
+                }}
                 onDelete={(event) =>
+                  hasPrivilege(currentUser, "cuesheet", "edit") ?
                   requestConfirm(
                     "Delete Cue Event",
                     `Permanently delete "${event.cue || event.id}"?`,
@@ -632,9 +648,10 @@ export function App({
                       await run(async () => setSnapshot(await api.deleteRow(eventId, event.id)));
                       setConfirm(initialConfirm);
                     },
-                  )
+                  ) : undefined
                 }
                 onReorder={(draggedId, targetId) => {
+                  if (!hasPrivilege(currentUser, "cuesheet", "reorder")) return;
                   const ordered = [...(snapshot?.events ?? [])].sort((a, b) => a.rowOrder - b.rowOrder);
                   const nextOrdered = moveByIds(ordered, draggedId, targetId);
                   requestConfirm(

@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -7,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Server as SocketServer } from "socket.io";
 import { createServer } from "node:http";
 import { z } from "zod";
+import pdfParse from "pdf-parse";
 import {
   listPlannerEvents,
   listTournaments,
@@ -31,8 +33,19 @@ import {
   updateMatchInfo,
   getVersions,
   ensurePlannerEvent,
+  listUsers,
+  getUserById,
+  createUser,
+  updateUser,
+  deleteUser,
+  listPersonnel,
+  createPersonnel,
+  updatePersonnel,
+  deletePersonnel,
+  parseExpenseText,
 } from "./src/store.js";
 import { parseCueSheetFromWorkbook, findDefaultWorkbook } from "./src/xlsx.js";
+import { extractJsonObject, runOpenAIParse } from "./src/openai.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -192,8 +205,134 @@ const tournamentSchema = z
 
 const tournamentPatchSchema = tournamentSchema.partial();
 
-function actorFromRequest(req) {
-  return req.header("x-user")?.trim() || "operator";
+const privilegeEntrySchema = z.record(z.string(), z.boolean());
+const privilegesSchema = z.record(z.string(), privilegeEntrySchema);
+
+const userSchema = z
+  .object({
+    firstName: z.string().min(1),
+    lastName: z.string().optional().default(""),
+    email: z.string().email(),
+    password: z.string().min(8),
+    role: z.string().optional().default("staff"),
+    department: optionalTextSchema,
+    organization: optionalTextSchema,
+    active: z.boolean().optional(),
+    privileges: privilegesSchema.optional(),
+  })
+  .strict();
+
+const userPatchSchema = userSchema.partial();
+
+const expenseItemSchema = z
+  .object({
+    category: z.string().optional(),
+    description: z.string().optional(),
+    amount: z.number().optional(),
+    currency: z.string().optional(),
+    date: optionalTextSchema,
+    vendor: optionalTextSchema,
+    notes: optionalTextSchema,
+  })
+  .strict();
+
+const personnelDocumentSchema = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().optional(),
+    category: z.enum(["compliance", "finance", "misc"]).optional(),
+    fileName: optionalTextSchema,
+    mimeType: optionalTextSchema,
+    sizeBytes: z.number().nullable().optional(),
+    uploadedAt: z.string().optional(),
+    notes: optionalTextSchema,
+    compliance: z
+      .object({
+        documentType: optionalTextSchema,
+        referenceCode: optionalTextSchema,
+      })
+      .optional(),
+    finance: z
+      .object({
+        amount: z.number().nullable().optional(),
+        currency: optionalTextSchema,
+        vendor: optionalTextSchema,
+        documentDate: optionalTextSchema,
+        summary: optionalTextSchema,
+        parsedExpenses: z.array(expenseItemSchema).optional(),
+      })
+      .optional(),
+    misc: z
+      .object({
+        tags: z.array(z.string()).optional(),
+      })
+      .optional(),
+  })
+  .strict();
+
+const personnelSchema = z
+  .object({
+    tournamentId: z.string().optional(),
+    userId: optionalTextSchema,
+    firstName: z.string().min(1),
+    lastName: z.string().optional().default(""),
+    email: optionalTextSchema,
+    organization: optionalTextSchema,
+    arrivalDate: optionalTextSchema,
+    departureDate: optionalTextSchema,
+    offer: z
+      .object({
+        duration: optionalTextSchema,
+        compensation: optionalTextSchema,
+        benefits: z.array(z.string()).optional(),
+      })
+      .optional(),
+    role: optionalTextSchema,
+    department: optionalTextSchema,
+    managerUserId: optionalTextSchema,
+    placeOfService: optionalTextSchema,
+    expenses: z.array(expenseItemSchema).optional(),
+    documents: z.array(personnelDocumentSchema).optional(),
+  })
+  .strict();
+
+const personnelPatchSchema = personnelSchema.partial();
+
+function hasPrivilege(user, page, action) {
+  if (!user) return false;
+  if (user.role === "super_admin") return true;
+  return Boolean(user.privileges?.[page]?.[action]);
+}
+
+async function resolveRequestUser(req) {
+  const requestedUserId = req.header("x-user-id")?.trim() || "super-admin";
+  const user = await getUserById(requestedUserId);
+  if (user) return user;
+  return getUserById("super-admin");
+}
+
+function withPrivilege(page, action, handler) {
+  return async (req, res) => {
+    const user = await resolveRequestUser(req);
+    if (!hasPrivilege(user, page, action)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    return handler(req, res, user);
+  };
+}
+
+function withSuperAdmin(handler) {
+  return async (req, res) => {
+    const user = await resolveRequestUser(req);
+    if (!user || user.role !== "super_admin") {
+      return res.status(403).json({ error: "Super admin required" });
+    }
+    return handler(req, res, user);
+  };
+}
+
+function actorFromRequest(req, user) {
+  return user?.email || req.header("x-user")?.trim() || "operator";
 }
 
 async function broadcastSnapshot(eventId) {
@@ -239,65 +378,298 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
-app.get("/api/tournaments", async (_req, res) => {
-  res.json(await listTournaments());
+app.get("/api/current-user", async (req, res) => {
+  const user = await resolveRequestUser(req);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  return res.json(user);
 });
 
-app.post("/api/tournaments", async (req, res) => {
+app.get(
+  "/api/users",
+  withSuperAdmin(async (_req, res) => {
+    res.json(await listUsers());
+  }),
+);
+
+app.post(
+  "/api/users",
+  withSuperAdmin(async (req, res) => {
+    const parsed = userSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json(parsed.error.flatten());
+    }
+    const created = await createUser(parsed.data);
+    return res.status(201).json(created);
+  }),
+);
+
+app.patch(
+  "/api/users/:userId",
+  withSuperAdmin(async (req, res) => {
+    const parsed = userPatchSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json(parsed.error.flatten());
+    }
+    const updated = await updateUser(req.params.userId, parsed.data);
+    if (!updated) return res.status(404).json({ error: "User not found" });
+    return res.json(updated);
+  }),
+);
+
+app.delete(
+  "/api/users/:userId",
+  withSuperAdmin(async (req, res) => {
+    const removed = await deleteUser(req.params.userId);
+    if (!removed) return res.status(404).json({ error: "User not found or protected user" });
+    return res.json(removed);
+  }),
+);
+
+app.get(
+  "/api/personnel",
+  withSuperAdmin(async (req, res) => {
+    const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+    res.json(await listPersonnel(tournamentId));
+  }),
+);
+
+app.post(
+  "/api/personnel",
+  withSuperAdmin(async (req, res) => {
+    const parsed = personnelSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json(parsed.error.flatten());
+    }
+    const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+    const created = await createPersonnel(parsed.data, tournamentId ?? parsed.data.tournamentId ?? null);
+    return res.status(201).json(created);
+  }),
+);
+
+app.patch(
+  "/api/personnel/:personnelId",
+  withSuperAdmin(async (req, res) => {
+    const parsed = personnelPatchSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json(parsed.error.flatten());
+    }
+    const updated = await updatePersonnel(req.params.personnelId, parsed.data);
+    if (!updated) return res.status(404).json({ error: "Personnel not found" });
+    return res.json(updated);
+  }),
+);
+
+app.delete(
+  "/api/personnel/:personnelId",
+  withSuperAdmin(async (req, res) => {
+    const removed = await deletePersonnel(req.params.personnelId);
+    if (!removed) return res.status(404).json({ error: "Personnel not found" });
+    return res.json(removed);
+  }),
+);
+
+app.post(
+  "/api/personnel/expenses/parse",
+  withSuperAdmin(async (req, res) => {
+    const text = typeof req.body?.text === "string" ? req.body.text : "";
+    return res.json(parseExpenseText(text));
+  }),
+);
+
+app.post(
+  "/api/personnel/expenses/parse-pdf",
+  upload.single("file"),
+  withSuperAdmin(async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: "File missing" });
+    }
+    const fileName = String(req.file.originalname || "").toLowerCase();
+    const mimeType = String(req.file.mimetype || "").toLowerCase();
+    const header = fs.readFileSync(req.file.path).subarray(0, 4).toString("utf8");
+    const isPdf = mimeType.includes("pdf") || fileName.endsWith(".pdf") || header === "%PDF";
+    if (!isPdf) {
+      safeUnlink(req.file.path);
+      return res.status(400).json({ error: "Only PDF files are supported" });
+    }
+
+    try {
+      const pdfBuffer = fs.readFileSync(req.file.path);
+      const parsed = await pdfParse(pdfBuffer);
+      const text = String(parsed?.text || "").trim();
+      if (!text) {
+        return res.json({
+          amount: null,
+          currency: "EUR",
+          vendor: null,
+          documentDate: null,
+          summary: "",
+          expenses: [],
+          source: "empty",
+        });
+      }
+
+      const fallbackExpenses = parseExpenseText(text);
+      const fallbackAmount = fallbackExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const fallbackCurrency = fallbackExpenses[0]?.currency || "EUR";
+
+      const hasOpenAIKey = Boolean(String(process.env.OPENAI_API_KEY || "").trim());
+      if (!hasOpenAIKey) {
+        return res.json({
+          amount: fallbackAmount,
+          currency: fallbackCurrency,
+          vendor: null,
+          documentDate: null,
+          summary: fallbackExpenses.length ? `${fallbackExpenses.length} parsed expense items` : "",
+          expenses: fallbackExpenses,
+          source: "fallback",
+        });
+      }
+
+      const systemPrompt = `You extract finance data from a PDF text.
+Return ONLY valid JSON in this exact format:
+{
+  "amount": 0,
+  "currency": "EUR",
+  "vendor": "",
+  "documentDate": "YYYY-MM-DD",
+  "summary": "",
+  "expenses": [
+    {"category":"other","description":"","amount":0,"currency":"EUR","date":null,"vendor":null,"notes":null}
+  ]
+}
+Rules:
+- "amount" is the grand total of the document (if not explicit, sum line items).
+- "currency" should be the dominant currency code (EUR/USD/GBP/AED/SAR), default EUR.
+- "documentDate" must be YYYY-MM-DD when inferable, else empty string.
+- Keep expenses concise and meaningful.`;
+
+      const aiText = await runOpenAIParse({
+        systemPrompt,
+        userPrompt: `Extract structured finance data from this PDF text:\n${text}`,
+      });
+      const aiJson = extractJsonObject(aiText);
+
+      const aiExpensesRaw = Array.isArray(aiJson?.expenses) ? aiJson.expenses : [];
+      const aiExpensesText = aiExpensesRaw
+        .map((item) => {
+          const description = String(item?.description || "").trim();
+          const amount = Number(item?.amount || 0);
+          const currency = String(item?.currency || aiJson?.currency || "EUR").trim().toUpperCase();
+          return `${description} ${amount} ${currency}`.trim();
+        })
+        .filter(Boolean)
+        .join("\n");
+
+      const aiExpenses = aiExpensesText ? parseExpenseText(aiExpensesText) : [];
+      const amountCandidate = Number(aiJson?.amount);
+      const amount = Number.isFinite(amountCandidate)
+        ? amountCandidate
+        : aiExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0) || fallbackAmount;
+      const currency = String(aiJson?.currency || aiExpenses[0]?.currency || fallbackCurrency || "EUR")
+        .trim()
+        .toUpperCase();
+      const vendor = typeof aiJson?.vendor === "string" && aiJson.vendor.trim() ? aiJson.vendor.trim() : null;
+      const documentDate =
+        typeof aiJson?.documentDate === "string" && aiJson.documentDate.trim()
+          ? aiJson.documentDate.trim()
+          : null;
+      const summary =
+        typeof aiJson?.summary === "string" && aiJson.summary.trim()
+          ? aiJson.summary.trim()
+          : aiExpenses.length
+            ? `${aiExpenses.length} parsed expense items`
+            : "";
+
+      return res.json({
+        amount,
+        currency,
+        vendor,
+        documentDate,
+        summary,
+        expenses: aiExpenses.length ? aiExpenses : fallbackExpenses,
+        source: "openai",
+      });
+    } catch (error) {
+      const pdfBuffer = fs.readFileSync(req.file.path);
+      const parsed = await pdfParse(pdfBuffer);
+      const text = String(parsed?.text || "").trim();
+      const fallbackExpenses = parseExpenseText(text);
+      const fallbackAmount = fallbackExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      return res.json({
+        amount: fallbackAmount,
+        currency: fallbackExpenses[0]?.currency || "EUR",
+        vendor: null,
+        documentDate: null,
+        summary: fallbackExpenses.length ? `${fallbackExpenses.length} parsed expense items` : "",
+        expenses: fallbackExpenses,
+        source: "fallback_error",
+        parserError: error instanceof Error ? error.message : "Failed to parse with OpenAI",
+      });
+    } finally {
+      safeUnlink(req.file.path);
+    }
+  }),
+);
+
+app.get("/api/tournaments", withPrivilege("tournaments", "view", async (_req, res) => {
+  res.json(await listTournaments());
+}));
+
+app.post("/api/tournaments", withPrivilege("tournaments", "create", async (req, res, user) => {
   const parsed = tournamentSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
-  const created = await createTournament(parsed.data, actorFromRequest(req));
+  const created = await createTournament(parsed.data, actorFromRequest(req, user));
   return res.status(201).json(created);
-});
+}));
 
-app.patch("/api/tournaments/:tournamentId", async (req, res) => {
+app.patch("/api/tournaments/:tournamentId", withPrivilege("tournaments", "edit", async (req, res, user) => {
   const parsed = tournamentPatchSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
-  const updated = await updateTournament(req.params.tournamentId, parsed.data, actorFromRequest(req));
+  const updated = await updateTournament(req.params.tournamentId, parsed.data, actorFromRequest(req, user));
   if (!updated) {
     return res.status(404).json({ error: "Tournament not found" });
   }
   return res.json(updated);
-});
+}));
 
-app.delete("/api/tournaments/:tournamentId", async (req, res) => {
-  const removed = await deleteTournament(req.params.tournamentId, actorFromRequest(req));
+app.delete("/api/tournaments/:tournamentId", withPrivilege("tournaments", "delete", async (req, res, user) => {
+  const removed = await deleteTournament(req.params.tournamentId, actorFromRequest(req, user));
   if (!removed) {
     return res.status(404).json({ error: "Tournament not found" });
   }
   return res.json(removed);
-});
+}));
 
-app.get("/api/events", async (req, res) => {
+app.get("/api/events", withPrivilege("events", "view", async (req, res) => {
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
   res.json(await listPlannerEvents(tournamentId));
-});
+}));
 
-app.get("/api/venues", async (req, res) => {
+app.get("/api/venues", withPrivilege("venues", "view", async (req, res) => {
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
   res.json(await listVenues(tournamentId));
-});
+}));
 
-app.post("/api/venues", async (req, res) => {
+app.post("/api/venues", withPrivilege("venues", "create", async (req, res, user) => {
   const parsed = venueSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
-  const venue = await createVenue(parsed.data, actorFromRequest(req), tournamentId ?? parsed.data.tournamentId);
+  const venue = await createVenue(parsed.data, actorFromRequest(req, user), tournamentId ?? parsed.data.tournamentId);
   return res.status(201).json(venue);
-});
+}));
 
-app.get("/api/activations", async (req, res) => {
+app.get("/api/activations", withPrivilege("activations", "view", async (req, res) => {
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
   res.json(await listActivations(tournamentId));
-});
+}));
 
-app.post("/api/activations", async (req, res) => {
+app.post("/api/activations", withPrivilege("activations", "create", async (req, res, user) => {
   const parsed = activationSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
@@ -305,33 +677,33 @@ app.post("/api/activations", async (req, res) => {
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
   const activation = await createActivation(
     parsed.data,
-    actorFromRequest(req),
+    actorFromRequest(req, user),
     tournamentId ?? parsed.data.tournamentId,
   );
   return res.status(201).json(activation);
-});
+}));
 
-app.patch("/api/activations/:activationId", async (req, res) => {
+app.patch("/api/activations/:activationId", withPrivilege("activations", "edit", async (req, res, user) => {
   const parsed = activationPatchSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
-  const updated = await updateActivation(req.params.activationId, parsed.data, actorFromRequest(req));
+  const updated = await updateActivation(req.params.activationId, parsed.data, actorFromRequest(req, user));
   if (!updated) {
     return res.status(404).json({ error: "Activation not found" });
   }
   return res.json(updated);
-});
+}));
 
-app.delete("/api/activations/:activationId", async (req, res) => {
+app.delete("/api/activations/:activationId", withPrivilege("activations", "delete", async (req, res) => {
   const removed = await deleteActivation(req.params.activationId);
   if (!removed) {
     return res.status(404).json({ error: "Activation not found" });
   }
   return res.json(removed);
-});
+}));
 
-app.post("/api/activations/upload", upload.single("file"), async (req, res) => {
+app.post("/api/activations/upload", upload.single("file"), withPrivilege("activations", "upload", async (req, res, user) => {
   if (!req.file) {
     return res.status(400).json({ error: "File missing" });
   }
@@ -349,15 +721,15 @@ app.post("/api/activations/upload", upload.single("file"), async (req, res) => {
       durationMs: null,
       tags,
     },
-    actorFromRequest(req),
+    actorFromRequest(req, user),
     typeof req.query.tournamentId === "string" ? req.query.tournamentId : null,
   );
 
   safeUnlink(req.file.path);
   return res.status(201).json(activation);
-});
+}));
 
-app.post("/api/events", async (req, res) => {
+app.post("/api/events", withPrivilege("events", "create", async (req, res, user) => {
   const parsed = plannerEventSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
@@ -366,13 +738,13 @@ app.post("/api/events", async (req, res) => {
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
   const created = await createPlannerEvent(
     { ...parsed.data, tournamentId: tournamentId ?? parsed.data.tournamentId },
-    actorFromRequest(req),
+    actorFromRequest(req, user),
   );
   await broadcastSnapshot(created.event.id);
   return res.status(201).json(created);
-});
+}));
 
-app.patch("/api/events/:eventId", async (req, res) => {
+app.patch("/api/events/:eventId", withPrivilege("events", "edit", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
@@ -385,45 +757,45 @@ app.patch("/api/events/:eventId", async (req, res) => {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const updated = await updatePlannerEvent(found.eventId, parsed.data, actorFromRequest(req));
+  const updated = await updatePlannerEvent(found.eventId, parsed.data, actorFromRequest(req, user));
   if (!updated) {
     return res.status(404).json({ error: "Event not found" });
   }
 
   await broadcastSnapshot(found.eventId);
   return res.json(updated);
-});
+}));
 
-app.delete("/api/events/:eventId", async (req, res) => {
+app.delete("/api/events/:eventId", withPrivilege("events", "delete", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
   if (tournamentId && found.snapshot?.event?.tournamentId && found.snapshot.event.tournamentId !== tournamentId) {
     return res.status(404).json({ error: "Event not found" });
   }
-  const removed = await deletePlannerEvent(found.eventId, actorFromRequest(req));
+  const removed = await deletePlannerEvent(found.eventId, actorFromRequest(req, user));
   if (!removed) {
     return res.status(404).json({ error: "Event not found" });
   }
   io.emit("planner:event-deleted", { eventId: removed.id });
   return res.json(removed);
-});
+}));
 
-app.get("/api/events/:eventId/cuesheet", async (req, res) => {
+app.get("/api/events/:eventId/cuesheet", withPrivilege("cuesheet", "view", async (req, res) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
   return res.json(found.snapshot);
-});
+}));
 
-app.get("/api/events/:eventId/versions", async (req, res) => {
+app.get("/api/events/:eventId/versions", withPrivilege("cuesheet", "view", async (req, res) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
   const limit = Number(req.query.limit ?? 100);
   const versions = await getVersions(found.eventId, limit);
   return res.json(versions ?? []);
-});
+}));
 
-app.patch("/api/events/:eventId/match", async (req, res) => {
+app.patch("/api/events/:eventId/match", withPrivilege("cuesheet", "edit", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
 
@@ -432,16 +804,16 @@ app.patch("/api/events/:eventId/match", async (req, res) => {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const next = await updateMatchInfo(found.eventId, parsed.data, actorFromRequest(req));
+  const next = await updateMatchInfo(found.eventId, parsed.data, actorFromRequest(req, user));
   if (!next) {
     return res.status(404).json({ error: "Event not found" });
   }
 
   await broadcastSnapshot(found.eventId);
   return res.json(next);
-});
+}));
 
-app.post("/api/events/:eventId/cuesheet/import-default", async (req, res) => {
+app.post("/api/events/:eventId/cuesheet/import-default", withPrivilege("cuesheet", "import", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
 
@@ -454,14 +826,14 @@ app.post("/api/events/:eventId/cuesheet/import-default", async (req, res) => {
   const next = await replaceCuesheet(found.eventId, {
     rows: parsed.events,
     sourceFile: path.basename(workbookPath),
-    actor: actorFromRequest(req),
+    actor: actorFromRequest(req, user),
   });
 
   await broadcastSnapshot(found.eventId);
   return res.json(next);
-});
+}));
 
-app.post("/api/events/:eventId/cuesheet/import-xlsx", upload.single("file"), async (req, res) => {
+app.post("/api/events/:eventId/cuesheet/import-xlsx", upload.single("file"), withPrivilege("cuesheet", "import", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
 
@@ -474,7 +846,7 @@ app.post("/api/events/:eventId/cuesheet/import-xlsx", upload.single("file"), asy
     const next = await replaceCuesheet(found.eventId, {
       rows: parsed.events,
       sourceFile: req.file.originalname ?? "uploaded.xlsx",
-      actor: actorFromRequest(req),
+      actor: actorFromRequest(req, user),
     });
     await broadcastSnapshot(found.eventId);
     return res.json(next);
@@ -486,9 +858,9 @@ app.post("/api/events/:eventId/cuesheet/import-xlsx", upload.single("file"), asy
   } finally {
     safeUnlink(req.file.path);
   }
-});
+}));
 
-app.post("/api/events/:eventId/rows", async (req, res) => {
+app.post("/api/events/:eventId/rows", withPrivilege("cuesheet", "edit", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
 
@@ -497,12 +869,12 @@ app.post("/api/events/:eventId/rows", async (req, res) => {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const next = await createRow(found.eventId, parsed.data, actorFromRequest(req));
+  const next = await createRow(found.eventId, parsed.data, actorFromRequest(req, user));
   await broadcastSnapshot(found.eventId);
   return res.status(201).json(next);
-});
+}));
 
-app.patch("/api/events/:eventId/rows/:rowId", async (req, res) => {
+app.patch("/api/events/:eventId/rows/:rowId", withPrivilege("cuesheet", "edit", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
 
@@ -511,29 +883,29 @@ app.patch("/api/events/:eventId/rows/:rowId", async (req, res) => {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const next = await updateRow(found.eventId, req.params.rowId, parsed.data, actorFromRequest(req));
+  const next = await updateRow(found.eventId, req.params.rowId, parsed.data, actorFromRequest(req, user));
   if (!next) {
     return res.status(404).json({ error: "Row not found" });
   }
 
   await broadcastSnapshot(found.eventId);
   return res.json(next);
-});
+}));
 
-app.delete("/api/events/:eventId/rows/:rowId", async (req, res) => {
+app.delete("/api/events/:eventId/rows/:rowId", withPrivilege("cuesheet", "edit", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
 
-  const next = await deleteRow(found.eventId, req.params.rowId, actorFromRequest(req));
+  const next = await deleteRow(found.eventId, req.params.rowId, actorFromRequest(req, user));
   if (!next) {
     return res.status(404).json({ error: "Row not found" });
   }
 
   await broadcastSnapshot(found.eventId);
   return res.json(next);
-});
+}));
 
-app.post("/api/events/:eventId/rows/reorder", async (req, res) => {
+app.post("/api/events/:eventId/rows/reorder", withPrivilege("cuesheet", "reorder", async (req, res, user) => {
   const found = await ensureEventOr404(req, res);
   if (!found) return;
 
@@ -542,10 +914,10 @@ app.post("/api/events/:eventId/rows/reorder", async (req, res) => {
     return res.status(400).json({ error: "orderedIds array required" });
   }
 
-  const next = await reorderRows(found.eventId, orderedIds, actorFromRequest(req));
+  const next = await reorderRows(found.eventId, orderedIds, actorFromRequest(req, user));
   await broadcastSnapshot(found.eventId);
   return res.json(next);
-});
+}));
 
 io.on("connection", () => {
   // Event snapshots are fetched via HTTP on route enter.

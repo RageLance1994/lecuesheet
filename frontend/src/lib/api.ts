@@ -160,6 +160,107 @@ export type Tournament = {
   updatedAt: string;
 };
 
+export type PageKey =
+  | "events"
+  | "activations"
+  | "venues"
+  | "tournaments"
+  | "personnel"
+  | "cuesheet";
+
+export type Privileges = Record<string, Record<string, boolean>>;
+
+export type UserAccount = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  password: string;
+  role: string;
+  department?: string | null;
+  organization?: string | null;
+  active: boolean;
+  isSuperAdmin: boolean;
+  privileges: Privileges;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PersonnelExpense = {
+  id: string;
+  category: string;
+  description: string;
+  amount: number;
+  currency: string;
+  date?: string | null;
+  vendor?: string | null;
+  notes?: string | null;
+};
+
+export type PersonnelFinanceData = {
+  amount?: number | null;
+  currency?: string | null;
+  vendor?: string | null;
+  documentDate?: string | null;
+  summary?: string | null;
+  parsedExpenses?: PersonnelExpense[];
+};
+
+export type ParsedPersonnelFinance = {
+  amount: number | null;
+  currency: string;
+  vendor: string | null;
+  documentDate: string | null;
+  summary: string;
+  expenses: PersonnelExpense[];
+  source?: string;
+  parserError?: string;
+};
+
+export type PersonnelDocument = {
+  id: string;
+  name: string;
+  category: "compliance" | "finance" | "misc";
+  fileName?: string | null;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+  uploadedAt: string;
+  notes?: string | null;
+  compliance?: {
+    documentType?: string | null;
+    referenceCode?: string | null;
+  };
+  finance?: PersonnelFinanceData;
+  misc?: {
+    tags?: string[];
+  };
+};
+
+export type PersonnelRecord = {
+  id: string;
+  tournamentId?: string | null;
+  userId?: string | null;
+  firstName: string;
+  lastName: string;
+  email?: string | null;
+  organization?: string | null;
+  arrivalDate?: string | null;
+  departureDate?: string | null;
+  offer: {
+    duration?: string | null;
+    compensation?: string | null;
+    benefits: string[];
+  };
+  role?: string | null;
+  department?: string | null;
+  managerUserId?: string | null;
+  placeOfService?: string | null;
+  expenses: PersonnelExpense[];
+  documents: PersonnelDocument[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export function emptyMatchInfo(): MatchInfoDraft {
   return {
     matchId: "",
@@ -185,6 +286,28 @@ async function parseResponse<T>(responsePromise: Promise<Response>): Promise<T> 
     throw new Error(errorBody || `Request failed with status ${response.status}`);
   }
   return response.json() as Promise<T>;
+}
+
+let currentUserId = "super-admin";
+
+export function setApiUser(userId: string) {
+  currentUserId = userId?.trim() || "super-admin";
+}
+
+function authedFetch(input: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers ?? {});
+  headers.set("x-user-id", currentUserId);
+  return fetch(input, { ...init, headers });
+}
+
+export function hasPrivilege(
+  user: UserAccount | null | undefined,
+  page: string,
+  action: string,
+): boolean {
+  if (!user) return false;
+  if (user.role === "super_admin" || user.isSuperAdmin) return true;
+  return Boolean(user.privileges?.[page]?.[action]);
 }
 
 function withTournamentQuery(path: string, tournamentId?: string | null) {
@@ -254,7 +377,7 @@ function draftToMatchPatch(draft: MatchInfoDraft): MatchInfo {
 }
 
 export const api = {
-  getTournaments: () => parseResponse<Tournament[]>(fetch("/api/tournaments")),
+  getTournaments: () => parseResponse<Tournament[]>(authedFetch("/api/tournaments")),
   createTournament: (payload: {
     name: string;
     startDate?: string | null;
@@ -268,7 +391,7 @@ export const api = {
     hostCountries?: string[];
   }) =>
     parseResponse<Tournament>(
-      fetch("/api/tournaments", {
+      authedFetch("/api/tournaments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -290,7 +413,7 @@ export const api = {
     },
   ) =>
     parseResponse<Tournament>(
-      fetch(`/api/tournaments/${tournamentId}`, {
+      authedFetch(`/api/tournaments/${tournamentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -298,14 +421,14 @@ export const api = {
     ),
   deleteTournament: (tournamentId: string) =>
     parseResponse<Tournament>(
-      fetch(`/api/tournaments/${tournamentId}`, {
+      authedFetch(`/api/tournaments/${tournamentId}`, {
         method: "DELETE",
       }),
     ),
   getEvents: (tournamentId?: string | null) =>
-    parseResponse<PlannerEventSummary[]>(fetch(withTournamentQuery("/api/events", tournamentId))),
+    parseResponse<PlannerEventSummary[]>(authedFetch(withTournamentQuery("/api/events", tournamentId))),
   getActivations: (tournamentId?: string | null) =>
-    parseResponse<Activation[]>(fetch(withTournamentQuery("/api/activations", tournamentId))),
+    parseResponse<Activation[]>(authedFetch(withTournamentQuery("/api/activations", tournamentId))),
   createActivation: (payload: {
     name: string;
     tournamentId?: string;
@@ -316,7 +439,7 @@ export const api = {
     tags?: string[];
   }) =>
     parseResponse<Activation>(
-      fetch(withTournamentQuery("/api/activations", payload.tournamentId), {
+      authedFetch(withTournamentQuery("/api/activations", payload.tournamentId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -334,7 +457,7 @@ export const api = {
     },
   ) =>
     parseResponse<Activation>(
-      fetch(`/api/activations/${activationId}`, {
+      authedFetch(`/api/activations/${activationId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -342,7 +465,7 @@ export const api = {
     ),
   deleteActivation: (activationId: string) =>
     parseResponse<Activation>(
-      fetch(`/api/activations/${activationId}`, {
+      authedFetch(`/api/activations/${activationId}`, {
         method: "DELETE",
       }),
     ),
@@ -351,14 +474,14 @@ export const api = {
     data.append("file", file);
     data.append("tags", tags.join(","));
     return parseResponse<Activation>(
-      fetch(withTournamentQuery("/api/activations/upload", tournamentId), {
+      authedFetch(withTournamentQuery("/api/activations/upload", tournamentId), {
         method: "POST",
         body: data,
       }),
     );
   },
   getVenues: (tournamentId?: string | null) =>
-    parseResponse<Venue[]>(fetch(withTournamentQuery("/api/venues", tournamentId))),
+    parseResponse<Venue[]>(authedFetch(withTournamentQuery("/api/venues", tournamentId))),
   createVenue: (payload: {
     name: string;
     tournamentId?: string;
@@ -377,7 +500,7 @@ export const api = {
     };
   }) =>
     parseResponse<Venue>(
-      fetch(withTournamentQuery("/api/venues", payload.tournamentId), {
+      authedFetch(withTournamentQuery("/api/venues", payload.tournamentId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -385,7 +508,7 @@ export const api = {
     ),
   createPlannerEvent: (payload: { name?: string; match?: MatchInfo; tournamentId?: string }) =>
     parseResponse<CueSheetSnapshot>(
-      fetch(withTournamentQuery("/api/events", payload.tournamentId), {
+      authedFetch(withTournamentQuery("/api/events", payload.tournamentId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -398,7 +521,7 @@ export const api = {
     (() => {
       const { tournamentId, ...body } = payload;
       return parseResponse<CueSheetSnapshot>(
-        fetch(withTournamentQuery(`/api/events/${eventId}`, tournamentId), {
+        authedFetch(withTournamentQuery(`/api/events/${eventId}`, tournamentId), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -407,19 +530,19 @@ export const api = {
     })(),
   deletePlannerEvent: (eventId: string, tournamentId?: string | null) =>
     parseResponse<PlannerEventSummary>(
-      fetch(withTournamentQuery(`/api/events/${eventId}`, tournamentId), {
+      authedFetch(withTournamentQuery(`/api/events/${eventId}`, tournamentId), {
         method: "DELETE",
       }),
     ),
   getCueSheet: (eventId: string) =>
-    parseResponse<CueSheetSnapshot>(fetch(`/api/events/${eventId}/cuesheet`)),
+    parseResponse<CueSheetSnapshot>(authedFetch(`/api/events/${eventId}/cuesheet`)),
   importDefault: (eventId: string) =>
     parseResponse<CueSheetSnapshot>(
-      fetch(`/api/events/${eventId}/cuesheet/import-default`, { method: "POST" }),
+      authedFetch(`/api/events/${eventId}/cuesheet/import-default`, { method: "POST" }),
     ),
   addRow: (eventId: string, payload: Partial<CueEvent>) =>
     parseResponse<CueSheetSnapshot>(
-      fetch(`/api/events/${eventId}/rows`, {
+      authedFetch(`/api/events/${eventId}/rows`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -427,7 +550,7 @@ export const api = {
     ),
   updateRow: (eventId: string, rowId: string, payload: Partial<CueEvent>) =>
     parseResponse<CueSheetSnapshot>(
-      fetch(`/api/events/${eventId}/rows/${rowId}`, {
+      authedFetch(`/api/events/${eventId}/rows/${rowId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -435,11 +558,11 @@ export const api = {
     ),
   deleteRow: (eventId: string, rowId: string) =>
     parseResponse<CueSheetSnapshot>(
-      fetch(`/api/events/${eventId}/rows/${rowId}`, { method: "DELETE" }),
+      authedFetch(`/api/events/${eventId}/rows/${rowId}`, { method: "DELETE" }),
     ),
   reorderRows: (eventId: string, orderedIds: string[]) =>
     parseResponse<CueSheetSnapshot>(
-      fetch(`/api/events/${eventId}/rows/reorder`, {
+      authedFetch(`/api/events/${eventId}/rows/reorder`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ orderedIds }),
@@ -447,7 +570,7 @@ export const api = {
     ),
   saveMatchInfo: (eventId: string, payload: MatchInfoDraft) =>
     parseResponse<CueSheetSnapshot>(
-      fetch(`/api/events/${eventId}/match`, {
+      authedFetch(`/api/events/${eventId}/match`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draftToMatchPatch(payload)),
@@ -457,10 +580,102 @@ export const api = {
     const data = new FormData();
     data.append("file", file);
     return parseResponse<CueSheetSnapshot>(
-      fetch(`/api/events/${eventId}/cuesheet/import-xlsx`, {
+      authedFetch(`/api/events/${eventId}/cuesheet/import-xlsx`, {
+        method: "POST",
+        body: data,
+      }),
+    );
+  },
+  getCurrentUser: () => parseResponse<UserAccount>(authedFetch("/api/current-user")),
+  getUsers: () => parseResponse<UserAccount[]>(authedFetch("/api/users")),
+  createUser: (payload: {
+    firstName: string;
+    lastName?: string;
+    email: string;
+    password: string;
+    role?: string;
+    department?: string | null;
+    organization?: string | null;
+    active?: boolean;
+    privileges?: Privileges;
+  }) =>
+    parseResponse<UserAccount>(
+      authedFetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  updateUser: (
+    userId: string,
+    payload: Partial<{
+      firstName: string;
+      lastName: string;
+      email: string;
+      password: string;
+      role: string;
+      department: string | null;
+      organization: string | null;
+      active: boolean;
+      privileges: Privileges;
+    }>,
+  ) =>
+    parseResponse<UserAccount>(
+      authedFetch(`/api/users/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  deleteUser: (userId: string) =>
+    parseResponse<UserAccount>(
+      authedFetch(`/api/users/${userId}`, {
+        method: "DELETE",
+      }),
+    ),
+  getPersonnel: (tournamentId?: string | null) =>
+    parseResponse<PersonnelRecord[]>(authedFetch(withTournamentQuery("/api/personnel", tournamentId))),
+  createPersonnel: (
+    payload: Partial<PersonnelRecord> & { firstName: string; tournamentId?: string | null },
+  ) =>
+    parseResponse<PersonnelRecord>(
+      authedFetch(withTournamentQuery("/api/personnel", payload.tournamentId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  updatePersonnel: (personnelId: string, payload: Partial<PersonnelRecord>) =>
+    parseResponse<PersonnelRecord>(
+      authedFetch(`/api/personnel/${personnelId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  deletePersonnel: (personnelId: string) =>
+    parseResponse<PersonnelRecord>(
+      authedFetch(`/api/personnel/${personnelId}`, {
+        method: "DELETE",
+      }),
+    ),
+  parsePersonnelExpenses: (text: string) =>
+    parseResponse<PersonnelExpense[]>(
+      authedFetch("/api/personnel/expenses/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      }),
+    ),
+  parsePersonnelFinanceFromPdf: (file: File) => {
+    const data = new FormData();
+    data.append("file", file);
+    return parseResponse<ParsedPersonnelFinance>(
+      authedFetch("/api/personnel/expenses/parse-pdf", {
         method: "POST",
         body: data,
       }),
     );
   },
 };
+

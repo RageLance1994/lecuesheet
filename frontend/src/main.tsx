@@ -5,7 +5,9 @@ import { App } from "./pages/App";
 import { EventsPage } from "./pages/EventsPage";
 import { ActivationsPage } from "./pages/ActivationsPage";
 import { VenuesPage } from "./pages/VenuesPage";
-import { api, type Tournament } from "./lib/api";
+import { PersonnelPage } from "./pages/PersonnelPage";
+import { UsersPage } from "./pages/UsersPage";
+import { api, hasPrivilege, setApiUser, type Tournament, type UserAccount } from "./lib/api";
 import {
   TournamentWizardModal,
   emptyTournamentDraft,
@@ -32,6 +34,7 @@ function RouterShell() {
   const [editingTournamentId, setEditingTournamentId] = useState<string | null>(null);
   const [busyTournament, setBusyTournament] = useState(false);
   const [deleteTournamentTarget, setDeleteTournamentTarget] = useState<Tournament | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
 
   useEffect(() => {
     if (window.location.pathname === "/") {
@@ -49,6 +52,15 @@ function RouterShell() {
 
   useEffect(() => {
     let active = true;
+    setApiUser("super-admin");
+    api.getCurrentUser().then((user) => {
+      if (active) {
+        setCurrentUser(user);
+        setApiUser(user.id);
+      }
+    }).catch(() => {
+      if (active) setCurrentUser(null);
+    });
     api.getTournaments().then((rows) => {
       if (active) setTournaments(rows);
     }).catch(() => {
@@ -175,6 +187,12 @@ function RouterShell() {
   }
 
   const route = useMemo(() => {
+    if (pathname === "/users") {
+      return { type: "users" as const };
+    }
+    if (pathname === "/personnel") {
+      return { type: "personnel" as const };
+    }
     if (pathname === "/activations") {
       return { type: "activations" as const };
     }
@@ -188,6 +206,38 @@ function RouterShell() {
     return { type: "events" as const };
   }, [pathname]);
 
+  const pageAccess = useMemo(() => {
+    const user = currentUser;
+    return {
+      events: hasPrivilege(user, "events", "view"),
+      activations: hasPrivilege(user, "activations", "view"),
+      venues: hasPrivilege(user, "venues", "view"),
+      personnel: hasPrivilege(user, "personnel", "view") && user?.role === "super_admin",
+      users: user?.role === "super_admin",
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    const allowedPath = pageAccess.events
+      ? "/events"
+      : pageAccess.activations
+        ? "/activations"
+        : pageAccess.venues
+          ? "/venues"
+          : pageAccess.personnel
+            ? "/personnel"
+            : "/events";
+    const routeBlocked =
+      (pathname.startsWith("/events") && !pageAccess.events) ||
+      (pathname.startsWith("/activations") && !pageAccess.activations) ||
+      (pathname.startsWith("/venues") && !pageAccess.venues) ||
+      (pathname.startsWith("/personnel") && !pageAccess.personnel) ||
+      (pathname.startsWith("/users") && !pageAccess.users);
+    if (routeBlocked) {
+      navigate(allowedPath);
+    }
+  }, [pageAccess, pathname]);
+
   if (route.type === "cuesheet") {
     return (
       <>
@@ -200,6 +250,8 @@ function RouterShell() {
           onCreateTournament={openTournamentCreate}
           onEditTournament={openTournamentEdit}
           onDeleteTournament={setDeleteTournamentTarget}
+          currentUser={currentUser}
+          pageAccess={pageAccess}
         />
         <TournamentWizardModal
           open={tournamentWizardOpen}
@@ -227,6 +279,8 @@ function RouterShell() {
           onCreateTournament={openTournamentCreate}
           onEditTournament={openTournamentEdit}
           onDeleteTournament={setDeleteTournamentTarget}
+          currentUser={currentUser}
+          pageAccess={pageAccess}
         />
         <TournamentWizardModal
           open={tournamentWizardOpen}
@@ -254,6 +308,8 @@ function RouterShell() {
           onCreateTournament={openTournamentCreate}
           onEditTournament={openTournamentEdit}
           onDeleteTournament={setDeleteTournamentTarget}
+          currentUser={currentUser}
+          pageAccess={pageAccess}
         />
         <TournamentWizardModal
           open={tournamentWizardOpen}
@@ -270,6 +326,36 @@ function RouterShell() {
     );
   }
 
+  if (route.type === "personnel") {
+    return currentUser ? (
+      <PersonnelPage
+        onNavigate={navigate}
+        tournaments={tournaments}
+        selectedTournamentId={selectedTournamentId}
+        onSelectTournament={selectTournament}
+        onCreateTournament={openTournamentCreate}
+        onEditTournament={openTournamentEdit}
+        onDeleteTournament={setDeleteTournamentTarget}
+        pageAccess={pageAccess}
+      />
+    ) : null;
+  }
+
+  if (route.type === "users") {
+    return (
+      <UsersPage
+        onNavigate={navigate}
+        tournaments={tournaments}
+        selectedTournamentId={selectedTournamentId}
+        onSelectTournament={selectTournament}
+        onCreateTournament={openTournamentCreate}
+        onEditTournament={openTournamentEdit}
+        onDeleteTournament={setDeleteTournamentTarget}
+        pageAccess={pageAccess}
+      />
+    );
+  }
+
   return (
     <>
       <EventsPage
@@ -280,6 +366,8 @@ function RouterShell() {
         onCreateTournament={openTournamentCreate}
         onEditTournament={openTournamentEdit}
         onDeleteTournament={setDeleteTournamentTarget}
+        currentUser={currentUser}
+        pageAccess={pageAccess}
       />
       <TournamentWizardModal
         open={tournamentWizardOpen}

@@ -60,6 +60,17 @@ const DEFAULT_STATE = {
   venues: [],
   activations: [],
   tournaments: [],
+  users: [],
+  personnel: [],
+};
+
+const PAGE_ACTIONS = {
+  events: ["view", "create", "edit", "delete", "import"],
+  activations: ["view", "create", "edit", "delete", "upload"],
+  venues: ["view", "create", "edit", "delete"],
+  tournaments: ["view", "create", "edit", "delete"],
+  personnel: ["view", "create", "edit", "delete", "manageUsers", "managePrivileges"],
+  cuesheet: ["view", "edit", "import", "reorder"],
 };
 
 function getMongoClient() {
@@ -392,6 +403,159 @@ function normalizeTournament(tournament) {
   };
 }
 
+function createFullPrivileges() {
+  return Object.fromEntries(
+    Object.entries(PAGE_ACTIONS).map(([page, actions]) => [
+      page,
+      Object.fromEntries(actions.map((action) => [action, true])),
+    ]),
+  );
+}
+
+function normalizePrivileges(privileges, role = "staff") {
+  if (role === "super_admin") return createFullPrivileges();
+  const source = privileges && typeof privileges === "object" ? privileges : {};
+  return Object.fromEntries(
+    Object.entries(PAGE_ACTIONS).map(([page, actions]) => {
+      const pageSource = source[page] && typeof source[page] === "object" ? source[page] : {};
+      return [page, Object.fromEntries(actions.map((action) => [action, Boolean(pageSource[action])]))];
+    }),
+  );
+}
+
+function normalizeUser(user) {
+  const source = user && typeof user === "object" ? user : {};
+  const role = sanitizeText(source.role) || "staff";
+  const isSuperAdmin = role === "super_admin";
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    firstName: sanitizeText(source.firstName),
+    lastName: sanitizeText(source.lastName),
+    email: sanitizeText(source.email).toLowerCase() || `user-${randomUUID()}@local`,
+    password: sanitizeText(source.password) || "ChangeMe!123",
+    role,
+    department: sanitizeOptionalText(source.department),
+    organization: sanitizeOptionalText(source.organization),
+    active: source.active === undefined ? true : Boolean(source.active),
+    privileges: normalizePrivileges(source.privileges, role),
+    createdAt: source.createdAt || nowIso(),
+    updatedAt: source.updatedAt || nowIso(),
+    isSuperAdmin,
+  };
+}
+
+function createDefaultSuperAdmin() {
+  return normalizeUser({
+    id: "super-admin",
+    firstName: "Super",
+    lastName: "Admin",
+    email: "admin@liveengine.local",
+    password: "ChangeMe!123",
+    role: "super_admin",
+    department: "Operations",
+    organization: "Live Engine",
+    active: true,
+  });
+}
+
+function ensureUserList(users) {
+  if (!Array.isArray(users) || users.length === 0) {
+    return [createDefaultSuperAdmin()];
+  }
+  const normalized = users.map((item) => normalizeUser(item));
+  if (!normalized.some((user) => user.role === "super_admin")) {
+    normalized.unshift(createDefaultSuperAdmin());
+  }
+  return normalized;
+}
+
+function normalizeExpenseItem(item) {
+  const source = item && typeof item === "object" ? item : {};
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    category: sanitizeText(source.category) || "other",
+    description: sanitizeText(source.description),
+    amount: Number.isFinite(Number(source.amount)) ? Number(source.amount) : 0,
+    currency: sanitizeText(source.currency) || "EUR",
+    date: sanitizeOptionalText(source.date),
+    vendor: sanitizeOptionalText(source.vendor),
+    notes: sanitizeOptionalText(source.notes),
+  };
+}
+
+function normalizePersonnelFinanceData(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const amount = Number(source.amount);
+  return {
+    amount: Number.isFinite(amount) ? amount : null,
+    currency: sanitizeOptionalText(source.currency),
+    vendor: sanitizeOptionalText(source.vendor),
+    documentDate: sanitizeOptionalText(source.documentDate),
+    summary: sanitizeOptionalText(source.summary),
+    parsedExpenses: Array.isArray(source.parsedExpenses)
+      ? source.parsedExpenses.map((item) => normalizeExpenseItem(item))
+      : [],
+  };
+}
+
+function normalizePersonnelDocument(item) {
+  const source = item && typeof item === "object" ? item : {};
+  const categoryRaw = sanitizeText(source.category).toLowerCase();
+  const category = ["compliance", "finance", "misc"].includes(categoryRaw)
+    ? categoryRaw
+    : "misc";
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    name: sanitizeText(source.name) || sanitizeText(source.fileName) || "Document",
+    category,
+    fileName: sanitizeOptionalText(source.fileName),
+    mimeType: sanitizeOptionalText(source.mimeType),
+    sizeBytes: Number.isFinite(Number(source.sizeBytes)) ? Number(source.sizeBytes) : null,
+    uploadedAt: sanitizeText(source.uploadedAt) || nowIso(),
+    notes: sanitizeOptionalText(source.notes),
+    compliance: {
+      documentType: sanitizeOptionalText(source.compliance?.documentType),
+      referenceCode: sanitizeOptionalText(source.compliance?.referenceCode),
+    },
+    finance: normalizePersonnelFinanceData(source.finance),
+    misc: {
+      tags: sanitizeStringArray(source.misc?.tags),
+    },
+  };
+}
+
+function normalizePersonnelEntry(entry) {
+  const source = entry && typeof entry === "object" ? entry : {};
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    tournamentId: sanitizeOptionalText(source.tournamentId),
+    userId: sanitizeOptionalText(source.userId),
+    firstName: sanitizeText(source.firstName),
+    lastName: sanitizeText(source.lastName),
+    email: sanitizeOptionalText(source.email),
+    organization: sanitizeOptionalText(source.organization),
+    arrivalDate: sanitizeOptionalText(source.arrivalDate),
+    departureDate: sanitizeOptionalText(source.departureDate),
+    offer: {
+      duration: sanitizeOptionalText(source.offer?.duration),
+      compensation: sanitizeOptionalText(source.offer?.compensation),
+      benefits: sanitizeStringArray(source.offer?.benefits),
+    },
+    role: sanitizeOptionalText(source.role),
+    department: sanitizeOptionalText(source.department),
+    managerUserId: sanitizeOptionalText(source.managerUserId),
+    placeOfService: sanitizeOptionalText(source.placeOfService),
+    expenses: Array.isArray(source.expenses)
+      ? source.expenses.map((item) => normalizeExpenseItem(item))
+      : [],
+    documents: Array.isArray(source.documents)
+      ? source.documents.map((item) => normalizePersonnelDocument(item))
+      : [],
+    createdAt: source.createdAt || nowIso(),
+    updatedAt: source.updatedAt || nowIso(),
+  };
+}
+
 function createDefaultTournament() {
   return normalizeTournament({
     id: DEFAULT_TOURNAMENT_ID,
@@ -450,6 +614,8 @@ function migrateLegacyState(parsed) {
     venues: [],
     activations: [],
     tournaments: [createDefaultTournament()],
+    users: [createDefaultSuperAdmin()],
+    personnel: [],
   };
 }
 
@@ -467,6 +633,10 @@ function normalizeState(parsed) {
         ? parsed.activations.map((activation) => normalizeActivation(activation))
         : [],
       tournaments,
+      users: ensureUserList(parsed.users),
+      personnel: Array.isArray(parsed.personnel)
+        ? parsed.personnel.map((entry) => normalizePersonnelEntry(entry))
+        : [],
     };
   }
 
@@ -479,6 +649,10 @@ function normalizeState(parsed) {
         ? parsed.activations.map((activation) => normalizeActivation(activation))
         : [],
       tournaments,
+      users: ensureUserList(parsed.users),
+      personnel: Array.isArray(parsed.personnel)
+        ? parsed.personnel.map((entry) => normalizePersonnelEntry(entry))
+        : [],
     };
   }
 
@@ -983,6 +1157,145 @@ export async function getVersions(eventId, limit = 100) {
   if (!record) return null;
   const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
   return record.versions.slice(0, safeLimit);
+}
+
+export async function listUsers() {
+  const state = await readState();
+  return ensureUserList(state.users).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function getUserById(userId) {
+  const state = await readState();
+  const users = ensureUserList(state.users);
+  return users.find((user) => user.id === sanitizeText(userId)) ?? null;
+}
+
+export async function createUser(payload) {
+  const state = await readState();
+  const users = ensureUserList(state.users);
+  const next = normalizeUser(payload);
+  next.createdAt = nowIso();
+  next.updatedAt = next.createdAt;
+  users.push(next);
+  state.users = users;
+  await writeState(state);
+  return next;
+}
+
+export async function updateUser(userId, payload) {
+  const state = await readState();
+  const users = ensureUserList(state.users);
+  const index = users.findIndex((item) => item.id === sanitizeText(userId));
+  if (index === -1) return null;
+  const current = users[index];
+  const merged = normalizeUser({
+    ...current,
+    ...payload,
+    id: current.id,
+    createdAt: current.createdAt,
+  });
+  merged.updatedAt = nowIso();
+  users[index] = merged;
+  state.users = users;
+  await writeState(state);
+  return merged;
+}
+
+export async function deleteUser(userId) {
+  const state = await readState();
+  const users = ensureUserList(state.users);
+  const index = users.findIndex((item) => item.id === sanitizeText(userId));
+  if (index === -1) return null;
+  if (users[index].role === "super_admin") return null;
+  const [removed] = users.splice(index, 1);
+  state.users = users;
+  state.personnel = (state.personnel ?? []).map((entry) => {
+    const normalized = normalizePersonnelEntry(entry);
+    return normalized.userId === removed.id
+      ? { ...normalized, userId: null, managerUserId: normalized.managerUserId === removed.id ? null : normalized.managerUserId }
+      : normalized;
+  });
+  await writeState(state);
+  return removed;
+}
+
+export async function listPersonnel(tournamentId = null) {
+  const state = await readState();
+  const selectedTournamentId = resolveTournamentIdForList(state, tournamentId);
+  if (!selectedTournamentId) return [];
+  const fallbackTournamentId = resolveTournamentId(state, null);
+  return (state.personnel ?? [])
+    .map((entry) => normalizePersonnelEntry(entry))
+    .filter(
+      (entry) => withTournamentFallback(entry.tournamentId, fallbackTournamentId) === selectedTournamentId,
+    )
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function createPersonnel(payload, tournamentId = null) {
+  const state = await readState();
+  const selectedTournamentId = resolveTournamentId(state, tournamentId ?? payload?.tournamentId ?? null);
+  const next = normalizePersonnelEntry({ ...payload, tournamentId: selectedTournamentId });
+  next.createdAt = nowIso();
+  next.updatedAt = next.createdAt;
+  state.personnel = [...(state.personnel ?? []), next];
+  await writeState(state);
+  return next;
+}
+
+export async function updatePersonnel(personnelId, payload) {
+  const state = await readState();
+  const entries = (state.personnel ?? []).map((entry) => normalizePersonnelEntry(entry));
+  const index = entries.findIndex((item) => item.id === sanitizeText(personnelId));
+  if (index === -1) return null;
+  const current = entries[index];
+  const merged = normalizePersonnelEntry({
+    ...current,
+    ...payload,
+    id: current.id,
+    createdAt: current.createdAt,
+  });
+  merged.updatedAt = nowIso();
+  entries[index] = merged;
+  state.personnel = entries;
+  await writeState(state);
+  return merged;
+}
+
+export async function deletePersonnel(personnelId) {
+  const state = await readState();
+  const entries = (state.personnel ?? []).map((entry) => normalizePersonnelEntry(entry));
+  const index = entries.findIndex((item) => item.id === sanitizeText(personnelId));
+  if (index === -1) return null;
+  const [removed] = entries.splice(index, 1);
+  state.personnel = entries;
+  await writeState(state);
+  return removed;
+}
+
+export function parseExpenseText(input) {
+  const lines = String(input ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const parsed = lines.map((line) => {
+    const amountMatch = line.match(/([-+]?\d+(?:[.,]\d{1,2})?)/);
+    const amount = amountMatch ? Number(amountMatch[1].replace(",", ".")) : 0;
+    const upper = line.toUpperCase();
+    let category = "other";
+    if (upper.includes("FLIGHT") || upper.includes("AIR")) category = "flight";
+    else if (upper.includes("HOTEL") || upper.includes("ACCOMMODATION")) category = "accommodation";
+    else if (upper.includes("MEAL") || upper.includes("FOOD") || upper.includes("DINNER")) category = "meals";
+    else if (upper.includes("TAXI") || upper.includes("TRAIN") || upper.includes("TRANSPORT")) category = "transport";
+    const currencyMatch = line.match(/\b(EUR|USD|GBP|AED|SAR)\b/i);
+    return normalizeExpenseItem({
+      category,
+      description: line,
+      amount,
+      currency: currencyMatch ? currencyMatch[1].toUpperCase() : "EUR",
+    });
+  });
+  return parsed;
 }
 
 export async function ensurePlannerEvent(actor, payload = {}) {

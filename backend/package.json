@@ -13,10 +13,12 @@
   "description": "",
   "dependencies": {
     "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
     "express": "^5.2.1",
     "lecuesheet": "file:..",
     "mongodb": "^6.17.0",
     "multer": "^2.1.1",
+    "pdf-parse": "^1.1.4",
     "socket.io": "^4.8.3",
     "uuid": "^13.0.0",
     "xlsx": "^0.18.5",

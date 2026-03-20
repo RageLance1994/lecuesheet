@@ -1620,6 +1620,97 @@ h3 {
   font-size: 0.76rem;
 }
 
+.activation-group {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 0.35rem;
+}
+
+.activation-group__header {
+  width: 100%;
+  border: 0;
+  background: rgba(106, 168, 255, 0.08);
+  color: var(--foreground);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.45rem 0.6rem;
+  cursor: pointer;
+}
+
+.activation-group__rows {
+  display: grid;
+}
+
+.activation-group__row {
+  border: 0;
+  border-top: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--foreground);
+  padding: 0.4rem 0.6rem;
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  text-align: left;
+  cursor: pointer;
+}
+
+.activation-group__row:hover {
+  background: rgba(106, 168, 255, 0.06);
+}
+
+.privileges-grid {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.privileges-group {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.privileges-group__head {
+  width: 100%;
+  border: 0;
+  background: rgba(106, 168, 255, 0.1);
+  color: #dceaff;
+  padding: 0.48rem 0.62rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.privileges-table {
+  display: grid;
+}
+
+.privileges-table__row {
+  border: 0;
+  border-top: 1px solid rgba(106, 168, 255, 0.14);
+  background: transparent;
+  color: #dbe9ff;
+  padding: 0.44rem 0.62rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.55rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.privileges-table__row:hover {
+  background: rgba(106, 168, 255, 0.08);
+}
+
+.privileges-table__row span {
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  color: #bdd3f5;
+}
+
 .activation-dropzone {
   border: 1px dashed rgba(106, 168, 255, 0.45);
   border-radius: 10px;
@@ -2068,6 +2159,10 @@ h3 {
   gap: 0.24rem;
 }
 
+.field--wide {
+  grid-column: 1 / -1;
+}
+
 .field span {
   color: var(--muted);
   font-size: 0.68rem;
@@ -2094,6 +2189,33 @@ textarea {
 
 .notes-field {
   grid-column: span 2;
+}
+
+.data-table__row--drop-active {
+  background: rgba(106, 168, 255, 0.16);
+}
+
+.doc-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+}
+
+.doc-tabs__item {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(106, 168, 255, 0.06);
+  color: #cde0ff;
+  padding: 0.36rem 0.6rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.doc-tabs__item.is-active {
+  border-color: rgba(106, 168, 255, 0.5);
+  background: rgba(106, 168, 255, 0.18);
+  color: #f0f6ff;
 }
 
 .modal-actions {
