@@ -70,7 +70,17 @@ export function AppSidebar({
             }}
           >
             <span className="sidebar-tournament-switch__select-main">
-              <i className="fa-solid fa-trophy" />
+              {selectedTournament?.logoUrl ? (
+                <img
+                  className="sidebar-tournament-switch__logo"
+                  src={selectedTournament.logoUrl}
+                  alt=""
+                />
+              ) : (
+                <span className="sidebar-tournament-switch__logo-fallback" aria-hidden>
+                  <i className="fa-solid fa-trophy" />
+                </span>
+              )}
               <span>{selectedTournament?.name || "Select tournament"}</span>
             </span>
             <span className="sidebar-tournament-switch__select-meta">{selectedMeta || "No details"}</span>
@@ -112,7 +122,20 @@ export function AppSidebar({
                     setSelectorOpen(false);
                   }}
                 >
-                  <strong>{tournament.name}</strong>
+                  <span className="sidebar-tournament-switch__selector-main">
+                    {tournament.logoUrl ? (
+                      <img
+                        className="sidebar-tournament-switch__logo"
+                        src={tournament.logoUrl}
+                        alt=""
+                      />
+                    ) : (
+                      <span className="sidebar-tournament-switch__logo-fallback" aria-hidden>
+                        <i className="fa-solid fa-trophy" />
+                      </span>
+                    )}
+                    <strong>{tournament.name}</strong>
+                  </span>
                   <span>{meta || "No details"}</span>
                 </button>
               );
