@@ -66,6 +66,10 @@ export function EventsPage({
 
   async function loadEvents() {
     setError("");
+    if (!selectedTournamentId.trim()) {
+      setEvents([]);
+      return;
+    }
     try {
       const rows = await api.getEvents(selectedTournamentId);
       setEvents(rows);
@@ -75,6 +79,10 @@ export function EventsPage({
   }
 
   async function loadVenues() {
+    if (!selectedTournamentId.trim()) {
+      setVenues([]);
+      return;
+    }
     try {
       const rows = await api.getVenues(selectedTournamentId);
       setVenues(rows);
@@ -110,6 +118,10 @@ export function EventsPage({
   }
 
   async function submitWizard() {
+    if (!selectedTournamentId.trim()) {
+      setError("No tournament selected.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -117,6 +129,7 @@ export function EventsPage({
         await api.updatePlannerEvent(editingEventId, {
           name: draft.matchId || undefined,
           match: toMatchPayload(draft),
+          tournamentId: selectedTournamentId,
         });
         setWizardOpen(false);
         setEditingEventId(null);
@@ -266,7 +279,7 @@ export function EventsPage({
         open={Boolean(deleteEventId)}
         busy={busy}
         title="Delete Event"
-        description="Confermi eliminazione evento? Questa azione rimuove cuesheet, match info e version log."
+        description="Confirm event deletion? This action removes cuesheet, match info, and version log."
         actionLabel="Delete"
         onCancel={() => {
           if (busy) return;
@@ -277,7 +290,7 @@ export function EventsPage({
           setBusy(true);
           setError("");
           try {
-            await api.deletePlannerEvent(deleteEventId);
+            await api.deletePlannerEvent(deleteEventId, selectedTournamentId);
             setDeleteEventId(null);
             if (editingEventId === deleteEventId) {
               setEditingEventId(null);

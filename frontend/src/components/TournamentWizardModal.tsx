@@ -57,7 +57,7 @@ export function emptyTournamentDraft(): TournamentDraft {
     logoUrl: "",
     keyPeople: [],
     matchesCount: "",
-    format: "Eliminazione diretta",
+    format: "Single elimination",
     teamsCount: "",
     hostCountries: [],
   };
@@ -92,7 +92,7 @@ export function TournamentWizardModal({
             }}
           >
             <label className="field">
-              <span>Nome</span>
+              <span>Name</span>
               <input
                 value={draft.name}
                 onChange={(event) => onChange({ ...draft, name: event.target.value })}
@@ -100,7 +100,7 @@ export function TournamentWizardModal({
               />
             </label>
             <label className="field">
-              <span>Logo Torneo</span>
+              <span>Tournament logo</span>
               <input
                 value={draft.logoUrl}
                 onChange={(event) => onChange({ ...draft, logoUrl: event.target.value })}
@@ -108,7 +108,7 @@ export function TournamentWizardModal({
               />
             </label>
             <label className="field">
-              <span>Data inizio</span>
+              <span>Start date</span>
               <input
                 type="date"
                 value={draft.startDate}
@@ -116,7 +116,7 @@ export function TournamentWizardModal({
               />
             </label>
             <label className="field">
-              <span>Data fine</span>
+              <span>End date</span>
               <input
                 type="date"
                 value={draft.endDate}
@@ -124,7 +124,7 @@ export function TournamentWizardModal({
               />
             </label>
             <label className="field">
-              <span>Federazione</span>
+              <span>Federation</span>
               <input
                 value={draft.federation}
                 onChange={(event) => onChange({ ...draft, federation: event.target.value })}
@@ -132,7 +132,7 @@ export function TournamentWizardModal({
               />
             </label>
             <label className="field">
-              <span>Numero di partite</span>
+              <span>Number of matches</span>
               <input
                 type="number"
                 min={0}
@@ -141,7 +141,7 @@ export function TournamentWizardModal({
               />
             </label>
             <label className="field">
-              <span>Numero di squadre</span>
+              <span>Number of teams</span>
               <input
                 type="number"
                 min={0}
@@ -150,12 +150,12 @@ export function TournamentWizardModal({
               />
             </label>
             <label className="field">
-              <span>Formato</span>
+              <span>Format</span>
               <select
                 value={draft.format}
                 onChange={(event) => onChange({ ...draft, format: event.target.value })}
               >
-                <option value="Eliminazione diretta">Eliminazione diretta</option>
+                <option value="Single elimination">Single elimination</option>
                 <option value="Score">Score</option>
               </select>
             </label>
@@ -201,7 +201,7 @@ export function TournamentWizardModal({
             </div>
 
             <div className="field notes-field">
-              <span>Paesi Ospitanti</span>
+              <span>Host countries</span>
               <div className="activation-tags__list">
                 {draft.hostCountries.map((country) => (
                   <button

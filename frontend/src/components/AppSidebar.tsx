@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Tournament } from "../lib/api";
 
 type ActiveSection = "events" | "activations" | "venues";
@@ -29,6 +29,13 @@ export function AppSidebar({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const selectedTournament =
     tournaments.find((item) => item.id === selectedTournamentId) ?? tournaments[0] ?? null;
+  const sortedTournaments = useMemo(() => {
+    return [...tournaments].sort((a, b) => {
+      const aTime = a.startDate ? new Date(a.startDate).getTime() : Number.POSITIVE_INFINITY;
+      const bTime = b.startDate ? new Date(b.startDate).getTime() : Number.POSITIVE_INFINITY;
+      return aTime - bTime;
+    });
+  }, [tournaments]);
 
   useEffect(() => {
     function onMouseDown(event: MouseEvent) {
@@ -48,7 +55,7 @@ export function AppSidebar({
       </div>
 
       <div className="sidebar-tournament-switch" ref={menuRef}>
-        <label className="sidebar-tournament-switch__label">Torneo attivo</label>
+        <label className="sidebar-tournament-switch__label">Active Tournament</label>
         <div className="sidebar-tournament-switch__row">
           <button
             type="button"
@@ -79,7 +86,7 @@ export function AppSidebar({
           <button
             type="button"
             className="sidebar-tournament-switch__menu-trigger"
-            title="Azioni torneo"
+            title="Tournament actions"
             onClick={() => {
               setSelectorOpen(false);
               setMenuOpen((open) => !open);
@@ -90,7 +97,7 @@ export function AppSidebar({
         </div>
         {selectorOpen ? (
           <div className="sidebar-tournament-switch__selector-menu is-open">
-            {tournaments.map((tournament) => {
+            {sortedTournaments.map((tournament) => {
               const isSelected = tournament.id === selectedTournamentId;
               const year = tournament.startDate
                 ? new Date(tournament.startDate).getFullYear()
@@ -101,7 +108,7 @@ export function AppSidebar({
                 ? tournament.hostCountries.join(", ")
                 : "-";
               const federation = tournament.federation || "-";
-              const metaInline = `Paesi: ${countries}   Anno: ${year ?? "-"}   Federazione: ${federation}`;
+              const metaInline = `Countries: ${countries}   Year: ${year ?? "-"}   Federation: ${federation}`;
               return (
                 <button
                   key={tournament.id}
@@ -142,7 +149,7 @@ export function AppSidebar({
               }}
             >
               <i className="fa-solid fa-plus" />
-              <span>Nuovo torneo</span>
+              <span>New tournament</span>
             </button>
             <button
               type="button"
@@ -154,7 +161,7 @@ export function AppSidebar({
               }}
             >
               <i className="fa-solid fa-pen-to-square" />
-              <span>Modifica torneo</span>
+              <span>Edit tournament</span>
             </button>
             <button
               type="button"
@@ -167,7 +174,7 @@ export function AppSidebar({
               }}
             >
               <i className="fa-solid fa-trash" />
-              <span>Elimina torneo</span>
+              <span>Delete tournament</span>
             </button>
           </div>
         ) : null}

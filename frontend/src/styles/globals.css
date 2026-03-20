@@ -133,6 +133,8 @@ h3 {
   display: grid;
   gap: 0.3rem;
   position: relative;
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid rgba(106, 168, 255, 0.16);
 }
 
 .sidebar-tournament-switch__label {
@@ -229,6 +231,25 @@ h3 {
   display: grid;
   place-items: center;
   cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 160ms ease, visibility 160ms ease;
+}
+
+.sidebar-tournament-switch:hover .sidebar-tournament-switch__menu-trigger,
+.sidebar-tournament-switch:focus-within .sidebar-tournament-switch__menu-trigger {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .sidebar-tournament-switch__menu-trigger {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
 }
 
 .sidebar-tournament-switch__menu {

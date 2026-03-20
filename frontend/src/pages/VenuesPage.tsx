@@ -112,6 +112,10 @@ export function VenuesPage({
 
   async function loadVenues() {
     setError("");
+    if (!selectedTournamentId.trim()) {
+      setVenues([]);
+      return;
+    }
     try {
       setVenues(await api.getVenues(selectedTournamentId));
     } catch (err) {

@@ -266,6 +266,10 @@ export function ActivationsPage({
 
   async function loadActivations() {
     setError("");
+    if (!selectedTournamentId.trim()) {
+      setActivations([]);
+      return;
+    }
     try {
       setActivations(await api.getActivations(selectedTournamentId));
     } catch (err) {

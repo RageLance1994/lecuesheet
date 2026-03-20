@@ -54,7 +54,7 @@ export function HardConfirmModal({
           <p>{description}</p>
           <div className="confirm-code">{expectedCode}</div>
           <label className="field">
-            <span>Inserisci il codice per confermare</span>
+            <span>Enter the code to confirm</span>
             <input
               value={value}
               onChange={(event) => setValue(event.target.value.toUpperCase())}

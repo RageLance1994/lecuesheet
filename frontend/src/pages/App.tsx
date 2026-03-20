@@ -269,6 +269,13 @@ export function App({
 
   useEffect(() => {
     let active = true;
+    if (!selectedTournamentId.trim()) {
+      setActivationOptions([]);
+      setVenues([]);
+      return () => {
+        active = false;
+      };
+    }
     api.getActivations(selectedTournamentId).then((rows) => {
       if (active) setActivationOptions(rows);
     }).catch(() => {
@@ -353,7 +360,7 @@ export function App({
     if (editor.mode === "create") {
       requestConfirm(
         "Create New Cue Event",
-        "Conferma inserimento record nel cuesheet.",
+        "Confirm adding this record to the cuesheet.",
         "Create",
         async () => {
           await run(async () => {
@@ -371,7 +378,7 @@ export function App({
     const rowId = editor.eventId;
     requestConfirm(
       "Update Cue Event",
-      "Conferma modifica record.",
+      "Confirm record update.",
       "Save",
       async () => {
         await run(async () => {
@@ -547,7 +554,7 @@ export function App({
                       onClick={() => {
                         requestConfirm(
                           "Import Context XLSX",
-                          "Sostituisce l'attuale cuesheet con import da file xlsx di contesto.",
+                          "This replaces the current cuesheet with the imported context XLSX file.",
                           "Import",
                           async () => {
                             await run(async () => setSnapshot(await api.importDefault(eventId)));
@@ -572,7 +579,7 @@ export function App({
                           if (!file) return;
                           requestConfirm(
                             "Upload Context XLSX",
-                            `Confermi import del file ${file.name}?`,
+                            `Confirm import of file ${file.name}?`,
                             "Upload",
                             async () => {
                               await run(async () => {
@@ -619,7 +626,7 @@ export function App({
                 onDelete={(event) =>
                   requestConfirm(
                     "Delete Cue Event",
-                    `Eliminare definitivamente \"${event.cue || event.id}\"?`,
+                    `Permanently delete "${event.cue || event.id}"?`,
                     "Delete",
                     async () => {
                       await run(async () => setSnapshot(await api.deleteRow(eventId, event.id)));
@@ -632,7 +639,7 @@ export function App({
                   const nextOrdered = moveByIds(ordered, draggedId, targetId);
                   requestConfirm(
                     "Reorder CueSheet",
-                    "Confermi il nuovo ordine? Il sistema ricalcolera i timecode.",
+                    "Confirm the new order? The system will recalculate timecodes.",
                     "Apply",
                     async () => {
                       await run(async () =>

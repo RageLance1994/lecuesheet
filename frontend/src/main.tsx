@@ -125,7 +125,7 @@ function RouterShell() {
       logoUrl: tournament.logoUrl || "",
       keyPeople: tournament.keyPeople ?? [],
       matchesCount: tournament.matchesCount === null || tournament.matchesCount === undefined ? "" : String(tournament.matchesCount),
-      format: tournament.format || "Eliminazione diretta",
+      format: tournament.format || "Single elimination",
       teamsCount: tournament.teamsCount === null || tournament.teamsCount === undefined ? "" : String(tournament.teamsCount),
       hostCountries: tournament.hostCountries ?? [],
     });
@@ -295,11 +295,11 @@ function RouterShell() {
       <HardConfirmModal
         open={Boolean(deleteTournamentTarget)}
         busy={busyTournament}
-        title="Elimina torneo"
+        title="Delete tournament"
         description={
           deleteTournamentTarget
-            ? `Confermi eliminazione torneo \"${deleteTournamentTarget.name}\"? Verranno rimossi anche Events, Activations e Venues collegati.`
-            : "Confermi eliminazione torneo?"
+            ? `Confirm deletion of tournament "${deleteTournamentTarget.name}"? Linked events, activations, and venues will also be removed.`
+            : "Confirm tournament deletion?"
         }
         actionLabel="Delete Tournament"
         onCancel={() => {

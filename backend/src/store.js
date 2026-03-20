@@ -2,12 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { MongoClient } from "mongodb";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.resolve(__dirname, "..", "data");
 const DATA_FILE = path.join(DATA_DIR, "cuesheet.json");
 const DEFAULT_TOURNAMENT_ID = "test-tournament";
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017";
+const MONGODB_DB = process.env.MONGODB_DB || "ATSMainBKP";
+const MONGODB_COLLECTION = "planner_state";
+const MONGODB_STATE_ID = "primary";
+let mongoClientPromise = null;
 
 function createDefaultMatchTeam() {
   return {
@@ -56,11 +62,39 @@ const DEFAULT_STATE = {
   tournaments: [],
 };
 
-function ensureStorage() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(DEFAULT_STATE, null, 2), "utf-8");
+function getMongoClient() {
+  if (!mongoClientPromise) {
+    const client = new MongoClient(MONGODB_URI);
+    mongoClientPromise = client.connect().then(() => client);
   }
+  return mongoClientPromise;
+}
+
+async function getStateCollection() {
+  const client = await getMongoClient();
+  return client.db(MONGODB_DB).collection(MONGODB_COLLECTION);
+}
+
+async function ensureStorage() {
+  const collection = await getStateCollection();
+  const existing = await collection.findOne({ _id: MONGODB_STATE_ID });
+  if (existing?.state) return;
+
+  let seededState = structuredClone(DEFAULT_STATE);
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      const raw = fs.readFileSync(DATA_FILE, "utf-8");
+      seededState = normalizeState(JSON.parse(raw));
+    } catch {
+      seededState = structuredClone(DEFAULT_STATE);
+    }
+  }
+
+  await collection.updateOne(
+    { _id: MONGODB_STATE_ID },
+    { $set: { state: seededState, updatedAt: nowIso() } },
+    { upsert: true },
+  );
 }
 
 function nowIso() {
@@ -339,6 +373,8 @@ function normalizeEventRecord(record) {
 
 function normalizeTournament(tournament) {
   const source = tournament && typeof tournament === "object" ? tournament : {};
+  const rawFormat = sanitizeOptionalText(source.format);
+  const normalizedFormat = rawFormat === "Eliminazione diretta" ? "Single elimination" : rawFormat;
   return {
     id: sanitizeText(source.id) || randomUUID(),
     name: sanitizeText(source.name) || "Untitled Tournament",
@@ -348,7 +384,7 @@ function normalizeTournament(tournament) {
     logoUrl: sanitizeOptionalText(source.logoUrl),
     keyPeople: sanitizeStringArray(source.keyPeople),
     matchesCount: Number.isFinite(Number(source.matchesCount)) ? Number(source.matchesCount) : null,
-    format: sanitizeOptionalText(source.format),
+    format: normalizedFormat,
     teamsCount: Number.isFinite(Number(source.teamsCount)) ? Number(source.teamsCount) : null,
     hostCountries: sanitizeStringArray(source.hostCountries),
     createdAt: source.createdAt || nowIso(),
@@ -360,7 +396,7 @@ function createDefaultTournament() {
   return normalizeTournament({
     id: DEFAULT_TOURNAMENT_ID,
     name: "Test Tournament",
-    format: "Eliminazione diretta",
+    format: "Single elimination",
   });
 }
 
@@ -378,6 +414,18 @@ function resolveTournamentId(state, requestedTournamentId = null) {
     return requested;
   }
   return tournaments[0]?.id ?? DEFAULT_TOURNAMENT_ID;
+}
+
+function resolveTournamentIdForList(state, requestedTournamentId = null) {
+  const tournaments = ensureTournamentList(state.tournaments);
+  const requested = sanitizeText(requestedTournamentId);
+  if (!requested) {
+    return tournaments[0]?.id ?? DEFAULT_TOURNAMENT_ID;
+  }
+  if (!tournaments.some((item) => item.id === requested)) {
+    return null;
+  }
+  return requested;
 }
 
 function withTournamentFallback(itemTournamentId, fallbackTournamentId) {
@@ -437,20 +485,21 @@ function normalizeState(parsed) {
   return migrateLegacyState(parsed);
 }
 
-function readState() {
-  ensureStorage();
-  const raw = fs.readFileSync(DATA_FILE, "utf-8");
-  try {
-    const parsed = JSON.parse(raw);
-    return normalizeState(parsed);
-  } catch {
-    return structuredClone(DEFAULT_STATE);
-  }
+async function readState() {
+  await ensureStorage();
+  const collection = await getStateCollection();
+  const doc = await collection.findOne({ _id: MONGODB_STATE_ID });
+  return normalizeState(doc?.state ?? DEFAULT_STATE);
 }
 
-function writeState(state) {
+async function writeState(state) {
   const normalized = normalizeState(state);
-  fs.writeFileSync(DATA_FILE, JSON.stringify(normalized, null, 2), "utf-8");
+  const collection = await getStateCollection();
+  await collection.updateOne(
+    { _id: MONGODB_STATE_ID },
+    { $set: { state: normalized, updatedAt: nowIso() } },
+    { upsert: true },
+  );
   return normalized;
 }
 
@@ -462,6 +511,7 @@ function snapshotFromRecord(record) {
   return {
     event: {
       id: record.id,
+      tournamentId: sanitizeOptionalText(record.tournamentId),
       name: record.name,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
@@ -486,9 +536,10 @@ function plannerEventSummaryFromRecord(record) {
   };
 }
 
-export function listPlannerEvents(tournamentId = null) {
-  const state = readState();
-  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+export async function listPlannerEvents(tournamentId = null) {
+  const state = await readState();
+  const selectedTournamentId = resolveTournamentIdForList(state, tournamentId);
+  if (!selectedTournamentId) return [];
   const fallbackTournamentId = resolveTournamentId(state, null);
   return state.events
     .filter(
@@ -499,9 +550,10 @@ export function listPlannerEvents(tournamentId = null) {
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
-export function listVenues(tournamentId = null) {
-  const state = readState();
-  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+export async function listVenues(tournamentId = null) {
+  const state = await readState();
+  const selectedTournamentId = resolveTournamentIdForList(state, tournamentId);
+  if (!selectedTournamentId) return [];
   const fallbackTournamentId = resolveTournamentId(state, null);
   return (state.venues ?? [])
     .filter(
@@ -511,20 +563,21 @@ export function listVenues(tournamentId = null) {
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
-export function createVenue(payload, actor, tournamentId = null) {
-  const state = readState();
+export async function createVenue(payload, actor, tournamentId = null) {
+  const state = await readState();
   const selectedTournamentId = resolveTournamentId(state, tournamentId);
   const next = normalizeVenue({ ...payload, tournamentId: selectedTournamentId });
   next.updatedAt = nowIso();
   next.createdAt = next.createdAt || next.updatedAt;
   state.venues = [...(state.venues ?? []), next];
-  writeState(state);
+  await writeState(state);
   return next;
 }
 
-export function listActivations(tournamentId = null) {
-  const state = readState();
-  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+export async function listActivations(tournamentId = null) {
+  const state = await readState();
+  const selectedTournamentId = resolveTournamentIdForList(state, tournamentId);
+  if (!selectedTournamentId) return [];
   const fallbackTournamentId = resolveTournamentId(state, null);
   return (state.activations ?? [])
     .filter(
@@ -535,19 +588,19 @@ export function listActivations(tournamentId = null) {
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
-export function createActivation(payload, actor, tournamentId = null) {
-  const state = readState();
+export async function createActivation(payload, actor, tournamentId = null) {
+  const state = await readState();
   const selectedTournamentId = resolveTournamentId(state, tournamentId);
   const next = normalizeActivation({ ...payload, tournamentId: selectedTournamentId });
   next.updatedAt = nowIso();
   next.createdAt = next.createdAt || next.updatedAt;
   state.activations = [...(state.activations ?? []), next];
-  writeState(state);
+  await writeState(state);
   return next;
 }
 
-export function updateActivation(activationId, payload, actor) {
-  const state = readState();
+export async function updateActivation(activationId, payload, actor) {
+  const state = await readState();
   const index = (state.activations ?? []).findIndex((activation) => activation.id === activationId);
   if (index === -1) return null;
 
@@ -561,28 +614,28 @@ export function updateActivation(activationId, payload, actor) {
   merged.updatedAt = nowIso();
 
   state.activations[index] = merged;
-  writeState(state);
+  await writeState(state);
   return merged;
 }
 
-export function deleteActivation(activationId) {
-  const state = readState();
+export async function deleteActivation(activationId) {
+  const state = await readState();
   const index = (state.activations ?? []).findIndex((activation) => activation.id === activationId);
   if (index === -1) return null;
   const [removed] = state.activations.splice(index, 1);
-  writeState(state);
+  await writeState(state);
   return normalizeActivation(removed);
 }
 
-export function getPlannerEventSnapshot(eventId) {
-  const state = readState();
+export async function getPlannerEventSnapshot(eventId) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
   return snapshotFromRecord(record);
 }
 
-export function createPlannerEvent(payload, actor) {
-  const state = readState();
+export async function createPlannerEvent(payload, actor) {
+  const state = await readState();
   const selectedTournamentId = resolveTournamentId(state, payload?.tournamentId ?? null);
   const baseName = sanitizeText(payload?.name);
   const metadata = normalizeMetadata({
@@ -604,12 +657,12 @@ export function createPlannerEvent(payload, actor) {
   });
 
   state.events.push(record);
-  writeState(state);
+  await writeState(state);
   return snapshotFromRecord(record);
 }
 
-export function updatePlannerEvent(eventId, payload, actor) {
-  const state = readState();
+export async function updatePlannerEvent(eventId, payload, actor) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
 
@@ -641,36 +694,36 @@ export function updatePlannerEvent(eventId, payload, actor) {
     },
   });
 
-  writeState(state);
+  await writeState(state);
   return snapshotFromRecord(record);
 }
 
-export function deletePlannerEvent(eventId, actor) {
-  const state = readState();
+export async function deletePlannerEvent(eventId, actor) {
+  const state = await readState();
   const index = state.events.findIndex((eventRecord) => eventRecord.id === eventId);
   if (index === -1) return null;
   const [removed] = state.events.splice(index, 1);
-  writeState(state);
+  await writeState(state);
   return plannerEventSummaryFromRecord(removed);
 }
 
-export function listTournaments() {
-  const state = readState();
+export async function listTournaments() {
+  const state = await readState();
   return ensureTournamentList(state.tournaments).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
-export function createTournament(payload, actor) {
-  const state = readState();
+export async function createTournament(payload, actor) {
+  const state = await readState();
   const next = normalizeTournament(payload);
   next.updatedAt = nowIso();
   next.createdAt = next.createdAt || next.updatedAt;
   state.tournaments = [...ensureTournamentList(state.tournaments), next];
-  writeState(state);
+  await writeState(state);
   return next;
 }
 
-export function updateTournament(tournamentId, payload, actor) {
-  const state = readState();
+export async function updateTournament(tournamentId, payload, actor) {
+  const state = await readState();
   const tournaments = ensureTournamentList(state.tournaments);
   const index = tournaments.findIndex((item) => item.id === tournamentId);
   if (index === -1) return null;
@@ -686,12 +739,12 @@ export function updateTournament(tournamentId, payload, actor) {
 
   tournaments[index] = merged;
   state.tournaments = tournaments;
-  writeState(state);
+  await writeState(state);
   return merged;
 }
 
-export function deleteTournament(tournamentId, actor) {
-  const state = readState();
+export async function deleteTournament(tournamentId, actor) {
+  const state = await readState();
   const tournaments = ensureTournamentList(state.tournaments);
   const fallbackTournamentId = resolveTournamentId({ ...state, tournaments }, null);
   const index = tournaments.findIndex((item) => item.id === tournamentId);
@@ -708,12 +761,12 @@ export function deleteTournament(tournamentId, actor) {
     (item) => withTournamentFallback(item.tournamentId, fallbackTournamentId) !== tournamentId,
   );
   state.tournaments = tournaments.length > 0 ? tournaments : [createDefaultTournament()];
-  writeState(state);
+  await writeState(state);
   return removed;
 }
 
-export function replaceCuesheet(eventId, { rows, sourceFile, actor }) {
-  const state = readState();
+export async function replaceCuesheet(eventId, { rows, sourceFile, actor }) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
 
@@ -739,12 +792,12 @@ export function replaceCuesheet(eventId, { rows, sourceFile, actor }) {
     },
   });
 
-  writeState(state);
+  await writeState(state);
   return snapshotFromRecord(record);
 }
 
-export function updateMatchInfo(eventId, patch, actor) {
-  const state = readState();
+export async function updateMatchInfo(eventId, patch, actor) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
 
@@ -774,12 +827,12 @@ export function updateMatchInfo(eventId, patch, actor) {
     },
   });
 
-  writeState(state);
+  await writeState(state);
   return snapshotFromRecord(record);
 }
 
-export function createRow(eventId, payload, actor) {
-  const state = readState();
+export async function createRow(eventId, payload, actor) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
 
@@ -809,12 +862,12 @@ export function createRow(eventId, payload, actor) {
     after: row,
   });
 
-  writeState(state);
+  await writeState(state);
   return snapshotFromRecord(record);
 }
 
-export function updateRow(eventId, rowId, payload, actor) {
-  const state = readState();
+export async function updateRow(eventId, rowId, payload, actor) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
 
@@ -865,12 +918,12 @@ export function updateRow(eventId, rowId, payload, actor) {
     after: record.rows.find((row) => row.id === rowId),
   });
 
-  writeState(state);
+  await writeState(state);
   return snapshotFromRecord(record);
 }
 
-export function deleteRow(eventId, rowId, actor) {
-  const state = readState();
+export async function deleteRow(eventId, rowId, actor) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
 
@@ -892,12 +945,12 @@ export function deleteRow(eventId, rowId, actor) {
     before: removed,
   });
 
-  writeState(state);
+  await writeState(state);
   return snapshotFromRecord(record);
 }
 
-export function reorderRows(eventId, orderedIds, actor) {
-  const state = readState();
+export async function reorderRows(eventId, orderedIds, actor) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
 
@@ -920,21 +973,22 @@ export function reorderRows(eventId, orderedIds, actor) {
     details: { total: record.rows.length },
   });
 
-  writeState(state);
+  await writeState(state);
   return snapshotFromRecord(record);
 }
 
-export function getVersions(eventId, limit = 100) {
-  const state = readState();
+export async function getVersions(eventId, limit = 100) {
+  const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
   const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
   return record.versions.slice(0, safeLimit);
 }
 
-export function ensurePlannerEvent(actor, payload = {}) {
-  const existing = listPlannerEvents(payload?.tournamentId ?? null);
+export async function ensurePlannerEvent(actor, payload = {}) {
+  const existing = await listPlannerEvents(payload?.tournamentId ?? null);
   if (existing.length > 0) return existing[0].id;
-  const created = createPlannerEvent(payload, actor);
+  const created = await createPlannerEvent(payload, actor);
   return created.event.id;
 }
+

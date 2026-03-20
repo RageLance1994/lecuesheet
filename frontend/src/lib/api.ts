@@ -391,17 +391,23 @@ export const api = {
         body: JSON.stringify(payload),
       }),
     ),
-  updatePlannerEvent: (eventId: string, payload: { name?: string; match?: MatchInfo }) =>
-    parseResponse<CueSheetSnapshot>(
-      fetch(`/api/events/${eventId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }),
-    ),
-  deletePlannerEvent: (eventId: string) =>
+  updatePlannerEvent: (
+    eventId: string,
+    payload: { name?: string; match?: MatchInfo; tournamentId?: string },
+  ) =>
+    (() => {
+      const { tournamentId, ...body } = payload;
+      return parseResponse<CueSheetSnapshot>(
+        fetch(withTournamentQuery(`/api/events/${eventId}`, tournamentId), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+    })(),
+  deletePlannerEvent: (eventId: string, tournamentId?: string | null) =>
     parseResponse<PlannerEventSummary>(
-      fetch(`/api/events/${eventId}`, {
+      fetch(withTournamentQuery(`/api/events/${eventId}`, tournamentId), {
         method: "DELETE",
       }),
     ),

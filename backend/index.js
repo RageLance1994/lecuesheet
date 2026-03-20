@@ -196,8 +196,8 @@ function actorFromRequest(req) {
   return req.header("x-user")?.trim() || "operator";
 }
 
-function broadcastSnapshot(eventId) {
-  const snapshot = getPlannerEventSnapshot(eventId);
+async function broadcastSnapshot(eventId) {
+  const snapshot = await getPlannerEventSnapshot(eventId);
   if (!snapshot) return;
   io.emit("cuesheet:updated", { eventId, snapshot });
 }
@@ -209,9 +209,9 @@ function safeUnlink(filePath) {
   }
 }
 
-function ensureEventOr404(req, res) {
+async function ensureEventOr404(req, res) {
   const eventId = req.params.eventId;
-  const snapshot = getPlannerEventSnapshot(eventId);
+  const snapshot = await getPlannerEventSnapshot(eventId);
   if (!snapshot) {
     res.status(404).json({ error: "Event not found" });
     return null;
@@ -219,16 +219,16 @@ function ensureEventOr404(req, res) {
   return { eventId, snapshot };
 }
 
-function tryBootstrapFromDefaultWorkbook() {
-  const events = listPlannerEvents();
+async function tryBootstrapFromDefaultWorkbook() {
+  const events = await listPlannerEvents();
   if (events.length > 0) return;
 
-  const eventId = ensurePlannerEvent("bootstrap", { name: "Imported Event" });
+  const eventId = await ensurePlannerEvent("bootstrap", { name: "Imported Event" });
   const workbookPath = findDefaultWorkbook(projectRoot);
   if (!workbookPath) return;
 
   const parsed = parseCueSheetFromWorkbook(workbookPath);
-  replaceCuesheet(eventId, {
+  await replaceCuesheet(eventId, {
     rows: parsed.events,
     sourceFile: path.basename(workbookPath),
     actor: "bootstrap",
@@ -239,71 +239,71 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
-app.get("/api/tournaments", (_req, res) => {
-  res.json(listTournaments());
+app.get("/api/tournaments", async (_req, res) => {
+  res.json(await listTournaments());
 });
 
-app.post("/api/tournaments", (req, res) => {
+app.post("/api/tournaments", async (req, res) => {
   const parsed = tournamentSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
-  const created = createTournament(parsed.data, actorFromRequest(req));
+  const created = await createTournament(parsed.data, actorFromRequest(req));
   return res.status(201).json(created);
 });
 
-app.patch("/api/tournaments/:tournamentId", (req, res) => {
+app.patch("/api/tournaments/:tournamentId", async (req, res) => {
   const parsed = tournamentPatchSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
-  const updated = updateTournament(req.params.tournamentId, parsed.data, actorFromRequest(req));
+  const updated = await updateTournament(req.params.tournamentId, parsed.data, actorFromRequest(req));
   if (!updated) {
     return res.status(404).json({ error: "Tournament not found" });
   }
   return res.json(updated);
 });
 
-app.delete("/api/tournaments/:tournamentId", (req, res) => {
-  const removed = deleteTournament(req.params.tournamentId, actorFromRequest(req));
+app.delete("/api/tournaments/:tournamentId", async (req, res) => {
+  const removed = await deleteTournament(req.params.tournamentId, actorFromRequest(req));
   if (!removed) {
     return res.status(404).json({ error: "Tournament not found" });
   }
   return res.json(removed);
 });
 
-app.get("/api/events", (req, res) => {
+app.get("/api/events", async (req, res) => {
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
-  res.json(listPlannerEvents(tournamentId));
+  res.json(await listPlannerEvents(tournamentId));
 });
 
-app.get("/api/venues", (req, res) => {
+app.get("/api/venues", async (req, res) => {
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
-  res.json(listVenues(tournamentId));
+  res.json(await listVenues(tournamentId));
 });
 
-app.post("/api/venues", (req, res) => {
+app.post("/api/venues", async (req, res) => {
   const parsed = venueSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
-  const venue = createVenue(parsed.data, actorFromRequest(req), tournamentId ?? parsed.data.tournamentId);
+  const venue = await createVenue(parsed.data, actorFromRequest(req), tournamentId ?? parsed.data.tournamentId);
   return res.status(201).json(venue);
 });
 
-app.get("/api/activations", (req, res) => {
+app.get("/api/activations", async (req, res) => {
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
-  res.json(listActivations(tournamentId));
+  res.json(await listActivations(tournamentId));
 });
 
-app.post("/api/activations", (req, res) => {
+app.post("/api/activations", async (req, res) => {
   const parsed = activationSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
-  const activation = createActivation(
+  const activation = await createActivation(
     parsed.data,
     actorFromRequest(req),
     tournamentId ?? parsed.data.tournamentId,
@@ -311,27 +311,27 @@ app.post("/api/activations", (req, res) => {
   return res.status(201).json(activation);
 });
 
-app.patch("/api/activations/:activationId", (req, res) => {
+app.patch("/api/activations/:activationId", async (req, res) => {
   const parsed = activationPatchSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
-  const updated = updateActivation(req.params.activationId, parsed.data, actorFromRequest(req));
+  const updated = await updateActivation(req.params.activationId, parsed.data, actorFromRequest(req));
   if (!updated) {
     return res.status(404).json({ error: "Activation not found" });
   }
   return res.json(updated);
 });
 
-app.delete("/api/activations/:activationId", (req, res) => {
-  const removed = deleteActivation(req.params.activationId);
+app.delete("/api/activations/:activationId", async (req, res) => {
+  const removed = await deleteActivation(req.params.activationId);
   if (!removed) {
     return res.status(404).json({ error: "Activation not found" });
   }
   return res.json(removed);
 });
 
-app.post("/api/activations/upload", upload.single("file"), (req, res) => {
+app.post("/api/activations/upload", upload.single("file"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "File missing" });
   }
@@ -340,7 +340,7 @@ app.post("/api/activations/upload", upload.single("file"), (req, res) => {
     .map((item) => item.trim())
     .filter(Boolean);
 
-  const activation = createActivation(
+  const activation = await createActivation(
     {
       name: path.parse(req.file.originalname || "Activation").name,
       fileName: req.file.originalname || null,
@@ -357,41 +357,51 @@ app.post("/api/activations/upload", upload.single("file"), (req, res) => {
   return res.status(201).json(activation);
 });
 
-app.post("/api/events", (req, res) => {
+app.post("/api/events", async (req, res) => {
   const parsed = plannerEventSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
 
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
-  const created = createPlannerEvent(
+  const created = await createPlannerEvent(
     { ...parsed.data, tournamentId: tournamentId ?? parsed.data.tournamentId },
     actorFromRequest(req),
   );
-  broadcastSnapshot(created.event.id);
+  await broadcastSnapshot(created.event.id);
   return res.status(201).json(created);
 });
 
-app.patch("/api/events/:eventId", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.patch("/api/events/:eventId", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  if (tournamentId && found.snapshot?.event?.tournamentId && found.snapshot.event.tournamentId !== tournamentId) {
+    return res.status(404).json({ error: "Event not found" });
+  }
 
   const parsed = plannerEventPatchSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const updated = updatePlannerEvent(found.eventId, parsed.data, actorFromRequest(req));
+  const updated = await updatePlannerEvent(found.eventId, parsed.data, actorFromRequest(req));
   if (!updated) {
     return res.status(404).json({ error: "Event not found" });
   }
 
-  broadcastSnapshot(found.eventId);
+  await broadcastSnapshot(found.eventId);
   return res.json(updated);
 });
 
-app.delete("/api/events/:eventId", (req, res) => {
-  const removed = deletePlannerEvent(req.params.eventId, actorFromRequest(req));
+app.delete("/api/events/:eventId", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
+  if (!found) return;
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  if (tournamentId && found.snapshot?.event?.tournamentId && found.snapshot.event.tournamentId !== tournamentId) {
+    return res.status(404).json({ error: "Event not found" });
+  }
+  const removed = await deletePlannerEvent(found.eventId, actorFromRequest(req));
   if (!removed) {
     return res.status(404).json({ error: "Event not found" });
   }
@@ -399,22 +409,22 @@ app.delete("/api/events/:eventId", (req, res) => {
   return res.json(removed);
 });
 
-app.get("/api/events/:eventId/cuesheet", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.get("/api/events/:eventId/cuesheet", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
   return res.json(found.snapshot);
 });
 
-app.get("/api/events/:eventId/versions", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.get("/api/events/:eventId/versions", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
   const limit = Number(req.query.limit ?? 100);
-  const versions = getVersions(found.eventId, limit);
+  const versions = await getVersions(found.eventId, limit);
   return res.json(versions ?? []);
 });
 
-app.patch("/api/events/:eventId/match", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.patch("/api/events/:eventId/match", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
 
   const parsed = matchInfoSchema.safeParse(req.body ?? {});
@@ -422,17 +432,17 @@ app.patch("/api/events/:eventId/match", (req, res) => {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const next = updateMatchInfo(found.eventId, parsed.data, actorFromRequest(req));
+  const next = await updateMatchInfo(found.eventId, parsed.data, actorFromRequest(req));
   if (!next) {
     return res.status(404).json({ error: "Event not found" });
   }
 
-  broadcastSnapshot(found.eventId);
+  await broadcastSnapshot(found.eventId);
   return res.json(next);
 });
 
-app.post("/api/events/:eventId/cuesheet/import-default", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.post("/api/events/:eventId/cuesheet/import-default", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
 
   const workbookPath = findDefaultWorkbook(projectRoot);
@@ -441,18 +451,18 @@ app.post("/api/events/:eventId/cuesheet/import-default", (req, res) => {
   }
 
   const parsed = parseCueSheetFromWorkbook(workbookPath);
-  const next = replaceCuesheet(found.eventId, {
+  const next = await replaceCuesheet(found.eventId, {
     rows: parsed.events,
     sourceFile: path.basename(workbookPath),
     actor: actorFromRequest(req),
   });
 
-  broadcastSnapshot(found.eventId);
+  await broadcastSnapshot(found.eventId);
   return res.json(next);
 });
 
-app.post("/api/events/:eventId/cuesheet/import-xlsx", upload.single("file"), (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.post("/api/events/:eventId/cuesheet/import-xlsx", upload.single("file"), async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
 
   if (!req.file?.path) {
@@ -461,12 +471,12 @@ app.post("/api/events/:eventId/cuesheet/import-xlsx", upload.single("file"), (re
 
   try {
     const parsed = parseCueSheetFromWorkbook(req.file.path);
-    const next = replaceCuesheet(found.eventId, {
+    const next = await replaceCuesheet(found.eventId, {
       rows: parsed.events,
       sourceFile: req.file.originalname ?? "uploaded.xlsx",
       actor: actorFromRequest(req),
     });
-    broadcastSnapshot(found.eventId);
+    await broadcastSnapshot(found.eventId);
     return res.json(next);
   } catch (error) {
     return res.status(400).json({
@@ -478,8 +488,8 @@ app.post("/api/events/:eventId/cuesheet/import-xlsx", upload.single("file"), (re
   }
 });
 
-app.post("/api/events/:eventId/rows", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.post("/api/events/:eventId/rows", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
 
   const parsed = rowSchema.safeParse(req.body ?? {});
@@ -487,13 +497,13 @@ app.post("/api/events/:eventId/rows", (req, res) => {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const next = createRow(found.eventId, parsed.data, actorFromRequest(req));
-  broadcastSnapshot(found.eventId);
+  const next = await createRow(found.eventId, parsed.data, actorFromRequest(req));
+  await broadcastSnapshot(found.eventId);
   return res.status(201).json(next);
 });
 
-app.patch("/api/events/:eventId/rows/:rowId", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.patch("/api/events/:eventId/rows/:rowId", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
 
   const parsed = rowSchema.partial().safeParse(req.body ?? {});
@@ -501,30 +511,30 @@ app.patch("/api/events/:eventId/rows/:rowId", (req, res) => {
     return res.status(400).json(parsed.error.flatten());
   }
 
-  const next = updateRow(found.eventId, req.params.rowId, parsed.data, actorFromRequest(req));
+  const next = await updateRow(found.eventId, req.params.rowId, parsed.data, actorFromRequest(req));
   if (!next) {
     return res.status(404).json({ error: "Row not found" });
   }
 
-  broadcastSnapshot(found.eventId);
+  await broadcastSnapshot(found.eventId);
   return res.json(next);
 });
 
-app.delete("/api/events/:eventId/rows/:rowId", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.delete("/api/events/:eventId/rows/:rowId", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
 
-  const next = deleteRow(found.eventId, req.params.rowId, actorFromRequest(req));
+  const next = await deleteRow(found.eventId, req.params.rowId, actorFromRequest(req));
   if (!next) {
     return res.status(404).json({ error: "Row not found" });
   }
 
-  broadcastSnapshot(found.eventId);
+  await broadcastSnapshot(found.eventId);
   return res.json(next);
 });
 
-app.post("/api/events/:eventId/rows/reorder", (req, res) => {
-  const found = ensureEventOr404(req, res);
+app.post("/api/events/:eventId/rows/reorder", async (req, res) => {
+  const found = await ensureEventOr404(req, res);
   if (!found) return;
 
   const orderedIds = Array.isArray(req.body?.orderedIds) ? req.body.orderedIds : null;
@@ -532,8 +542,8 @@ app.post("/api/events/:eventId/rows/reorder", (req, res) => {
     return res.status(400).json({ error: "orderedIds array required" });
   }
 
-  const next = reorderRows(found.eventId, orderedIds, actorFromRequest(req));
-  broadcastSnapshot(found.eventId);
+  const next = await reorderRows(found.eventId, orderedIds, actorFromRequest(req));
+  await broadcastSnapshot(found.eventId);
   return res.json(next);
 });
 
@@ -541,7 +551,9 @@ io.on("connection", () => {
   // Event snapshots are fetched via HTTP on route enter.
 });
 
-tryBootstrapFromDefaultWorkbook();
+if (process.env.BOOTSTRAP_DEFAULT_XLSX === "1") {
+  void tryBootstrapFromDefaultWorkbook();
+}
 
 const isMainModule =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
