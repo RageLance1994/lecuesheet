@@ -509,6 +509,8 @@ function normalizePersonnelDocument(item) {
     name: sanitizeText(source.name) || sanitizeText(source.fileName) || "Document",
     category,
     fileName: sanitizeOptionalText(source.fileName),
+    fileUrl: sanitizeOptionalText(source.fileUrl),
+    filePath: sanitizeOptionalText(source.filePath),
     mimeType: sanitizeOptionalText(source.mimeType),
     sizeBytes: Number.isFinite(Number(source.sizeBytes)) ? Number(source.sizeBytes) : null,
     uploadedAt: sanitizeText(source.uploadedAt) || nowIso(),
@@ -1230,6 +1232,12 @@ export async function listPersonnel(tournamentId = null) {
       (entry) => withTournamentFallback(entry.tournamentId, fallbackTournamentId) === selectedTournamentId,
     )
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function getPersonnelById(personnelId) {
+  const state = await readState();
+  const entries = (state.personnel ?? []).map((entry) => normalizePersonnelEntry(entry));
+  return entries.find((item) => item.id === sanitizeText(personnelId)) ?? null;
 }
 
 export async function createPersonnel(payload, tournamentId = null) {

@@ -5,10 +5,10 @@ import multer from "multer";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 import { Server as SocketServer } from "socket.io";
 import { createServer } from "node:http";
 import { z } from "zod";
-import pdfParse from "pdf-parse";
 import {
   listPlannerEvents,
   listTournaments,
@@ -39,17 +39,20 @@ import {
   updateUser,
   deleteUser,
   listPersonnel,
+  getPersonnelById,
   createPersonnel,
   updatePersonnel,
   deletePersonnel,
   parseExpenseText,
 } from "./src/store.js";
 import { parseCueSheetFromWorkbook, findDefaultWorkbook } from "./src/xlsx.js";
-import { extractJsonObject, runOpenAIParse } from "./src/openai.js";
+import { parseFinancePdfWithAgent } from "./src/personnelFinanceAgent.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
+const uploadsRoot = path.join(__dirname, "uploads");
+const personnelDocsRoot = path.join(uploadsRoot, "personnel");
 
 const app = express();
 const server = createServer(app);
@@ -64,6 +67,8 @@ const upload = multer({
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+fs.mkdirSync(personnelDocsRoot, { recursive: true });
+app.use("/uploads", express.static(uploadsRoot));
 
 const rowSchema = z.object({
   phase: z
@@ -226,6 +231,7 @@ const userPatchSchema = userSchema.partial();
 
 const expenseItemSchema = z
   .object({
+    id: z.string().optional(),
     category: z.string().optional(),
     description: z.string().optional(),
     amount: z.number().optional(),
@@ -242,6 +248,8 @@ const personnelDocumentSchema = z
     name: z.string().optional(),
     category: z.enum(["compliance", "finance", "misc"]).optional(),
     fileName: optionalTextSchema,
+    fileUrl: optionalTextSchema,
+    filePath: optionalTextSchema,
     mimeType: optionalTextSchema,
     sizeBytes: z.number().nullable().optional(),
     uploadedAt: z.string().optional(),
@@ -335,49 +343,6 @@ function actorFromRequest(req, user) {
   return user?.email || req.header("x-user")?.trim() || "operator";
 }
 
-function normalizeMoney(value) {
-  const raw = String(value || "").trim().replace(/\s+/g, "").replace(",", ".");
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function extractHeuristicFinanceFromText(text) {
-  const source = String(text || "");
-  const amountLine =
-    source.match(/(?:Ammontare|Amount)\s*[:\-]?\s*([0-9]+(?:[.,][0-9]{1,2})?)\s*(EUR|USD|GBP|AED|SAR)?/i) ||
-    source.match(/([0-9]+(?:[.,][0-9]{1,2})?)\s*(EUR|USD|GBP|AED|SAR)\b/i);
-  const vendorLine =
-    source.match(/(?:Paid\s*For|Payment\s*For|Descrizione|Merchant)\s*[:\-]?\s*(.+)/i) || null;
-  const dateLine =
-    source.match(/(\d{1,2}\s+[A-Za-zÀ-ÿ]+\s*,?\s*\d{4})/) ||
-    source.match(/(\d{1,2}[\/.-]\d{1,2}[\/.-]\d{4})/) ||
-    null;
-
-  const amount = normalizeMoney(amountLine?.[1]);
-  const currency = String(amountLine?.[2] || "EUR").trim().toUpperCase();
-  const vendor = vendorLine?.[1]?.trim() || null;
-  const documentDate = dateLine?.[1]?.trim() || null;
-
-  const expenses =
-    amount && amount > 0
-      ? parseExpenseText(`${vendor || "service fee"} ${amount} ${currency}`).map((item) => ({
-          ...item,
-          category: item.category === "other" ? "fees" : item.category,
-          vendor: item.vendor || vendor,
-          date: item.date || documentDate,
-        }))
-      : [];
-
-  return {
-    amount: amount ?? 0,
-    currency,
-    vendor,
-    documentDate,
-    summary: amount && amount > 0 ? "Heuristic finance extraction" : "",
-    expenses,
-  };
-}
-
 async function broadcastSnapshot(eventId) {
   const snapshot = await getPlannerEventSnapshot(eventId);
   if (!snapshot) return;
@@ -388,6 +353,45 @@ function safeUnlink(filePath) {
   if (!filePath) return;
   if (fs.existsSync(filePath)) {
     fs.unlinkSync(filePath);
+  }
+}
+
+function sanitizeFilePart(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function getFileExtension(fileName, mimeType) {
+  const ext = path.extname(String(fileName || "")).toLowerCase();
+  if (ext) return ext;
+  if (String(mimeType || "").toLowerCase().includes("pdf")) return ".pdf";
+  return "";
+}
+
+function createStoredDocumentPath({ personnelId, documentId, originalName, mimeType }) {
+  const safePersonnelId = sanitizeFilePart(personnelId) || "personnel";
+  const safeDocumentId = sanitizeFilePart(documentId) || randomUUID();
+  const ext = getFileExtension(originalName, mimeType);
+  const base = sanitizeFilePart(path.basename(String(originalName || "document"), path.extname(String(originalName || "")))) || "document";
+  const fileName = `${safePersonnelId}_${safeDocumentId}_${base}${ext}`;
+  return {
+    fileName,
+    absolutePath: path.join(personnelDocsRoot, fileName),
+    publicUrl: `/uploads/personnel/${fileName}`,
+  };
+}
+
+function removePersonnelDocumentFile(doc) {
+  const storedPath = typeof doc?.filePath === "string" ? doc.filePath : "";
+  if (storedPath) safeUnlink(storedPath);
+}
+
+function removePersonnelDocumentFiles(docs) {
+  for (const doc of Array.isArray(docs) ? docs : []) {
+    removePersonnelDocumentFile(doc);
   }
 }
 
@@ -507,6 +511,7 @@ app.delete(
   withSuperAdmin(async (req, res) => {
     const removed = await deletePersonnel(req.params.personnelId);
     if (!removed) return res.status(404).json({ error: "Personnel not found" });
+    removePersonnelDocumentFiles(removed.documents);
     return res.json(removed);
   }),
 );
@@ -523,156 +528,256 @@ app.post(
   "/api/personnel/expenses/parse-pdf",
   upload.single("file"),
   withSuperAdmin(async (req, res) => {
+    const debugRequested =
+      String(req.query?.debug ?? "").trim() === "1" || String(process.env.PARSER_DEBUG || "").trim() === "1";
     if (!req.file) {
       return res.status(400).json({ error: "File missing" });
     }
-    const fileName = String(req.file.originalname || "").toLowerCase();
+    const fileName = String(req.file.originalname || "");
+    const loweredFileName = fileName.toLowerCase();
     const mimeType = String(req.file.mimetype || "").toLowerCase();
     const header = fs.readFileSync(req.file.path).subarray(0, 4).toString("utf8");
-    const isPdf = mimeType.includes("pdf") || fileName.endsWith(".pdf") || header === "%PDF";
+    const isPdf = mimeType.includes("pdf") || loweredFileName.endsWith(".pdf") || header === "%PDF";
     if (!isPdf) {
       safeUnlink(req.file.path);
       return res.status(400).json({ error: "Only PDF files are supported" });
     }
 
     try {
-      const pdfBuffer = fs.readFileSync(req.file.path);
-      const parsed = await pdfParse(pdfBuffer);
-      const text = String(parsed?.text || "").trim();
-      if (!text) {
-        return res.json({
-          amount: null,
-          currency: "EUR",
-          vendor: null,
-          documentDate: null,
-          summary: "",
-          expenses: [],
-          source: "empty",
-        });
-      }
-
-      const fallbackExpenses = parseExpenseText(text);
-      const fallbackAmount = fallbackExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const fallbackCurrency = fallbackExpenses[0]?.currency || "EUR";
-      const heuristic = extractHeuristicFinanceFromText(text);
-
-      const hasOpenAIKey = Boolean(String(process.env.OPENAI_API_KEY || "").trim());
-      if (!hasOpenAIKey) {
-        const amount = heuristic.amount > 0 ? heuristic.amount : fallbackAmount;
-        const expenses = heuristic.expenses.length ? heuristic.expenses : fallbackExpenses;
-        return res.json({
-          amount,
-          currency: heuristic.currency || fallbackCurrency,
-          vendor: heuristic.vendor,
-          documentDate: heuristic.documentDate,
-          summary:
-            heuristic.summary ||
-            (expenses.length ? `${expenses.length} parsed expense items` : ""),
-          expenses,
-          source: "fallback",
-        });
-      }
-
-      const systemPrompt = `You extract finance data from a PDF text.
-Return ONLY valid JSON in this exact format:
-{
-  "amount": 0,
-  "currency": "EUR",
-  "vendor": "",
-  "documentDate": "YYYY-MM-DD",
-  "summary": "",
-  "expenses": [
-    {"category":"other","description":"","amount":0,"currency":"EUR","date":null,"vendor":null,"notes":null}
-  ]
-}
-Rules:
-- "amount" is the grand total of the document (if not explicit, sum line items).
-- "currency" should be the dominant currency code (EUR/USD/GBP/AED/SAR), default EUR.
-- "documentDate" must be YYYY-MM-DD when inferable, else empty string.
-- Keep expenses concise and meaningful.`;
-
-      const aiText = await runOpenAIParse({
-        systemPrompt,
-        userPrompt: `Extract structured finance data from this PDF text:\n${text}`,
+      const parsed = await parseFinancePdfWithAgent({
+        filePath: req.file.path,
+        fileName,
+        debug: debugRequested,
       });
-      const aiJson = extractJsonObject(aiText);
-
-      const aiExpensesRaw = Array.isArray(aiJson?.expenses) ? aiJson.expenses : [];
-      const aiExpensesText = aiExpensesRaw
-        .map((item) => {
-          const description = String(item?.description || "").trim();
-          const amount = Number(item?.amount || 0);
-          const currency = String(item?.currency || aiJson?.currency || "EUR").trim().toUpperCase();
-          return `${description} ${amount} ${currency}`.trim();
-        })
-        .filter(Boolean)
-        .join("\n");
-
-      const aiExpenses = aiExpensesText ? parseExpenseText(aiExpensesText) : [];
-      const amountCandidate = Number(aiJson?.amount);
-      const heuristicAmount = heuristic.amount > 0 ? heuristic.amount : 0;
-      const amount = Number.isFinite(amountCandidate)
-        ? amountCandidate
-        : aiExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0) ||
-          heuristicAmount ||
-          fallbackAmount;
-      const currency = String(aiJson?.currency || aiExpenses[0]?.currency || fallbackCurrency || "EUR")
-        .trim()
-        .toUpperCase();
-      const vendor =
-        typeof aiJson?.vendor === "string" && aiJson.vendor.trim()
-          ? aiJson.vendor.trim()
-          : heuristic.vendor;
-      const documentDate =
-        typeof aiJson?.documentDate === "string" && aiJson.documentDate.trim()
-          ? aiJson.documentDate.trim()
-          : heuristic.documentDate;
-      const summary =
-        typeof aiJson?.summary === "string" && aiJson.summary.trim()
-          ? aiJson.summary.trim()
-          : aiExpenses.length
-            ? `${aiExpenses.length} parsed expense items`
-            : heuristic.summary;
-      const expenses =
-        aiExpenses.length
-          ? aiExpenses
-          : heuristic.expenses.length
-            ? heuristic.expenses
-            : fallbackExpenses;
-
-      return res.json({
-        amount,
-        currency,
-        vendor,
-        documentDate,
-        summary,
-        expenses,
-        source: "openai",
-      });
+      return res.json(parsed);
     } catch (error) {
-      const pdfBuffer = fs.readFileSync(req.file.path);
-      const parsed = await pdfParse(pdfBuffer);
-      const text = String(parsed?.text || "").trim();
-      const fallbackExpenses = parseExpenseText(text);
-      const fallbackAmount = fallbackExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const heuristic = extractHeuristicFinanceFromText(text);
-      const amount = heuristic.amount > 0 ? heuristic.amount : fallbackAmount;
-      const expenses = heuristic.expenses.length ? heuristic.expenses : fallbackExpenses;
-      return res.json({
-        amount,
-        currency: heuristic.currency || fallbackExpenses[0]?.currency || "EUR",
-        vendor: heuristic.vendor,
-        documentDate: heuristic.documentDate,
-        summary:
-          heuristic.summary ||
-          (expenses.length ? `${expenses.length} parsed expense items` : ""),
-        expenses,
-        source: "fallback_error",
-        parserError: error instanceof Error ? error.message : "Failed to parse with OpenAI",
+      return res.status(422).json({
+        amount: null,
+        currency: "EUR",
+        vendor: null,
+        documentDate: null,
+        summary: "",
+        notes: "",
+        expenses: [],
+        source: "openai_agents_error",
+        parserError: error instanceof Error ? error.message : "Failed to parse PDF with OpenAI Agents",
       });
     } finally {
       safeUnlink(req.file.path);
     }
+  }),
+);
+
+app.post(
+  "/api/personnel/:personnelId/documents",
+  upload.single("file"),
+  withSuperAdmin(async (req, res) => {
+    const personnel = await getPersonnelById(req.params.personnelId);
+    if (!personnel) {
+      safeUnlink(req.file?.path);
+      return res.status(404).json({ error: "Personnel not found" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: "File missing" });
+    }
+
+    const documentId = randomUUID();
+    const categoryRaw = String(req.body?.category || "misc").trim().toLowerCase();
+    const category = ["compliance", "finance", "misc"].includes(categoryRaw) ? categoryRaw : "misc";
+    const now = new Date().toISOString();
+    const stored = createStoredDocumentPath({
+      personnelId: personnel.id,
+      documentId,
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype,
+    });
+
+    try {
+      fs.renameSync(req.file.path, stored.absolutePath);
+
+      const parsedExpenses = (() => {
+        const raw = req.body?.parsedExpenses;
+        if (typeof raw !== "string" || !raw.trim()) return [];
+        try {
+          const decoded = JSON.parse(raw);
+          return Array.isArray(decoded) ? decoded : [];
+        } catch {
+          return [];
+        }
+      })();
+
+      const amountRaw = Number(String(req.body?.financeAmount ?? "").replace(",", "."));
+      const financeAmount = Number.isFinite(amountRaw) ? amountRaw : null;
+
+      const nextDocument = {
+        id: documentId,
+        name: String(req.body?.name || req.file.originalname).trim() || req.file.originalname,
+        category,
+        fileName: req.file.originalname,
+        fileUrl: stored.publicUrl,
+        filePath: stored.absolutePath,
+        mimeType: req.file.mimetype || null,
+        sizeBytes: Number.isFinite(req.file.size) ? Number(req.file.size) : null,
+        uploadedAt: now,
+        notes: String(req.body?.notes || "").trim() || null,
+        compliance: {
+          documentType: String(req.body?.complianceType || "").trim() || null,
+          referenceCode: String(req.body?.complianceReference || "").trim() || null,
+        },
+        finance: {
+          amount: financeAmount,
+          currency: String(req.body?.financeCurrency || "").trim() || null,
+          vendor: String(req.body?.financeVendor || "").trim() || null,
+          documentDate: String(req.body?.financeDate || "").trim() || null,
+          summary: String(req.body?.financeSummary || "").trim() || null,
+          parsedExpenses,
+        },
+        misc: {
+          tags: String(req.body?.miscTags || "")
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean),
+        },
+      };
+
+      const currentDocs = Array.isArray(personnel.documents) ? personnel.documents : [];
+      const currentExpenses = Array.isArray(personnel.expenses) ? personnel.expenses : [];
+      const mergedExpenses =
+        category === "finance" && parsedExpenses.length ? [...currentExpenses, ...parsedExpenses] : currentExpenses;
+
+      const updated = await updatePersonnel(personnel.id, {
+        documents: [...currentDocs, nextDocument],
+        expenses: mergedExpenses,
+      });
+      if (!updated) {
+        removePersonnelDocumentFile(nextDocument);
+        return res.status(500).json({ error: "Failed to persist document" });
+      }
+      return res.status(201).json(nextDocument);
+    } catch (error) {
+      safeUnlink(req.file.path);
+      safeUnlink(stored.absolutePath);
+      return res.status(500).json({
+        error: error instanceof Error ? error.message : "Failed to upload document",
+      });
+    }
+  }),
+);
+
+app.patch(
+  "/api/personnel/:personnelId/documents/:documentId",
+  upload.single("file"),
+  withSuperAdmin(async (req, res) => {
+    const personnel = await getPersonnelById(req.params.personnelId);
+    if (!personnel) {
+      safeUnlink(req.file?.path);
+      return res.status(404).json({ error: "Personnel not found" });
+    }
+    const docs = Array.isArray(personnel.documents) ? personnel.documents : [];
+    const index = docs.findIndex((item) => item.id === req.params.documentId);
+    if (index === -1) {
+      safeUnlink(req.file?.path);
+      return res.status(404).json({ error: "Document not found" });
+    }
+
+    const current = docs[index];
+    let nextFileName = current.fileName;
+    let nextMime = current.mimeType;
+    let nextSize = current.sizeBytes;
+    let nextFileUrl = current.fileUrl;
+    let nextFilePath = current.filePath;
+
+    if (req.file) {
+      const stored = createStoredDocumentPath({
+        personnelId: personnel.id,
+        documentId: current.id,
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype,
+      });
+      fs.renameSync(req.file.path, stored.absolutePath);
+      removePersonnelDocumentFile(current);
+      nextFileName = req.file.originalname;
+      nextMime = req.file.mimetype || null;
+      nextSize = Number.isFinite(req.file.size) ? Number(req.file.size) : null;
+      nextFileUrl = stored.publicUrl;
+      nextFilePath = stored.absolutePath;
+    }
+
+    const parsedExpenses = (() => {
+      const raw = req.body?.parsedExpenses;
+      if (typeof raw !== "string") return current.finance?.parsedExpenses || [];
+      if (!raw.trim()) return [];
+      try {
+        const decoded = JSON.parse(raw);
+        return Array.isArray(decoded) ? decoded : [];
+      } catch {
+        return current.finance?.parsedExpenses || [];
+      }
+    })();
+
+    const amountRaw = Number(String(req.body?.financeAmount ?? current.finance?.amount ?? "").replace(",", "."));
+    const financeAmount = Number.isFinite(amountRaw) ? amountRaw : null;
+
+    const categoryRaw = String(req.body?.category || current.category || "misc").trim().toLowerCase();
+    const category = ["compliance", "finance", "misc"].includes(categoryRaw) ? categoryRaw : "misc";
+
+    const updatedDoc = {
+      ...current,
+      name: String(req.body?.name ?? current.name ?? "").trim() || current.name,
+      category,
+      fileName: nextFileName || null,
+      fileUrl: nextFileUrl || null,
+      filePath: nextFilePath || null,
+      mimeType: nextMime || null,
+      sizeBytes: nextSize ?? null,
+      notes: String(req.body?.notes ?? current.notes ?? "").trim() || null,
+      compliance: {
+        documentType: String(req.body?.complianceType ?? current.compliance?.documentType ?? "").trim() || null,
+        referenceCode: String(req.body?.complianceReference ?? current.compliance?.referenceCode ?? "").trim() || null,
+      },
+      finance: {
+        amount: financeAmount,
+        currency: String(req.body?.financeCurrency ?? current.finance?.currency ?? "").trim() || null,
+        vendor: String(req.body?.financeVendor ?? current.finance?.vendor ?? "").trim() || null,
+        documentDate: String(req.body?.financeDate ?? current.finance?.documentDate ?? "").trim() || null,
+        summary: String(req.body?.financeSummary ?? current.finance?.summary ?? "").trim() || null,
+        parsedExpenses,
+      },
+      misc: {
+        tags: String(
+          req.body?.miscTags ??
+            (Array.isArray(current.misc?.tags) ? current.misc.tags.join(",") : ""),
+        )
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+      },
+    };
+
+    const nextDocs = [...docs];
+    nextDocs[index] = updatedDoc;
+    const updated = await updatePersonnel(personnel.id, { documents: nextDocs });
+    if (!updated) {
+      return res.status(500).json({ error: "Failed to update document" });
+    }
+    return res.json(updatedDoc);
+  }),
+);
+
+app.delete(
+  "/api/personnel/:personnelId/documents/:documentId",
+  withSuperAdmin(async (req, res) => {
+    const personnel = await getPersonnelById(req.params.personnelId);
+    if (!personnel) return res.status(404).json({ error: "Personnel not found" });
+    const docs = Array.isArray(personnel.documents) ? personnel.documents : [];
+    const index = docs.findIndex((item) => item.id === req.params.documentId);
+    if (index === -1) return res.status(404).json({ error: "Document not found" });
+    const [removedDoc] = docs.splice(index, 1);
+    removePersonnelDocumentFile(removedDoc);
+    const updated = await updatePersonnel(personnel.id, { documents: docs });
+    if (!updated) return res.status(500).json({ error: "Failed to delete document" });
+    return res.json(removedDoc);
   }),
 );
 
@@ -1003,3 +1108,4 @@ if (isMainModule) {
 }
 
 export { app, server, io };
+

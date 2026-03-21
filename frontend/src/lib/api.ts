@@ -212,6 +212,7 @@ export type ParsedPersonnelFinance = {
   vendor: string | null;
   documentDate: string | null;
   summary: string;
+  notes?: string | null;
   expenses: PersonnelExpense[];
   source?: string;
   parserError?: string;
@@ -222,6 +223,8 @@ export type PersonnelDocument = {
   name: string;
   category: "compliance" | "finance" | "misc";
   fileName?: string | null;
+  fileUrl?: string | null;
+  filePath?: string | null;
   mimeType?: string | null;
   sizeBytes?: number | null;
   uploadedAt: string;
@@ -259,6 +262,22 @@ export type PersonnelRecord = {
   documents: PersonnelDocument[];
   createdAt: string;
   updatedAt: string;
+};
+
+export type PersonnelDocumentUpsertPayload = {
+  file?: File | null;
+  category: "compliance" | "finance" | "misc";
+  name: string;
+  notes?: string;
+  complianceType?: string;
+  complianceReference?: string;
+  financeAmount?: string;
+  financeCurrency?: string;
+  financeVendor?: string;
+  financeDate?: string;
+  financeSummary?: string;
+  parsedExpenses?: PersonnelExpense[];
+  miscTags?: string;
 };
 
 export function emptyMatchInfo(): MatchInfoDraft {
@@ -656,6 +675,60 @@ export const api = {
   deletePersonnel: (personnelId: string) =>
     parseResponse<PersonnelRecord>(
       authedFetch(`/api/personnel/${personnelId}`, {
+        method: "DELETE",
+      }),
+    ),
+  uploadPersonnelDocument: (personnelId: string, payload: PersonnelDocumentUpsertPayload) => {
+    const data = new FormData();
+    if (payload.file) data.append("file", payload.file);
+    data.append("category", payload.category);
+    data.append("name", payload.name || "");
+    data.append("notes", payload.notes || "");
+    data.append("complianceType", payload.complianceType || "");
+    data.append("complianceReference", payload.complianceReference || "");
+    data.append("financeAmount", payload.financeAmount || "");
+    data.append("financeCurrency", payload.financeCurrency || "");
+    data.append("financeVendor", payload.financeVendor || "");
+    data.append("financeDate", payload.financeDate || "");
+    data.append("financeSummary", payload.financeSummary || "");
+    data.append("miscTags", payload.miscTags || "");
+    data.append("parsedExpenses", JSON.stringify(Array.isArray(payload.parsedExpenses) ? payload.parsedExpenses : []));
+    return parseResponse<PersonnelDocument>(
+      authedFetch(`/api/personnel/${personnelId}/documents`, {
+        method: "POST",
+        body: data,
+      }),
+    );
+  },
+  updatePersonnelDocument: (
+    personnelId: string,
+    documentId: string,
+    payload: PersonnelDocumentUpsertPayload,
+  ) => {
+    const data = new FormData();
+    if (payload.file) data.append("file", payload.file);
+    data.append("category", payload.category);
+    data.append("name", payload.name || "");
+    data.append("notes", payload.notes || "");
+    data.append("complianceType", payload.complianceType || "");
+    data.append("complianceReference", payload.complianceReference || "");
+    data.append("financeAmount", payload.financeAmount || "");
+    data.append("financeCurrency", payload.financeCurrency || "");
+    data.append("financeVendor", payload.financeVendor || "");
+    data.append("financeDate", payload.financeDate || "");
+    data.append("financeSummary", payload.financeSummary || "");
+    data.append("miscTags", payload.miscTags || "");
+    data.append("parsedExpenses", JSON.stringify(Array.isArray(payload.parsedExpenses) ? payload.parsedExpenses : []));
+    return parseResponse<PersonnelDocument>(
+      authedFetch(`/api/personnel/${personnelId}/documents/${documentId}`, {
+        method: "PATCH",
+        body: data,
+      }),
+    );
+  },
+  deletePersonnelDocument: (personnelId: string, documentId: string) =>
+    parseResponse<PersonnelDocument>(
+      authedFetch(`/api/personnel/${personnelId}/documents/${documentId}`, {
         method: "DELETE",
       }),
     ),

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "../components/AppSidebar";
 import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
@@ -79,6 +79,25 @@ function createDocumentDraft(file?: File | null): DocumentDraft {
   };
 }
 
+function createDocumentDraftFromDocument(document: PersonnelDocument): DocumentDraft {
+  return {
+    name: document.name || "Document",
+    notes: document.notes || "",
+    complianceType: document.compliance?.documentType || "",
+    complianceReference: document.compliance?.referenceCode || "",
+    financeAmount:
+      typeof document.finance?.amount === "number" && Number.isFinite(document.finance.amount)
+        ? document.finance.amount.toFixed(2)
+        : "",
+    financeCurrency: document.finance?.currency || "EUR",
+    financeVendor: document.finance?.vendor || "",
+    financeDate: document.finance?.documentDate || "",
+    financeSummary: document.finance?.summary || "",
+    miscTags: Array.isArray(document.misc?.tags) ? document.misc.tags.join(", ") : "",
+    parsedExpenses: Array.isArray(document.finance?.parsedExpenses) ? document.finance?.parsedExpenses : [],
+  };
+}
+
 export function PersonnelPage({
   onNavigate,
   tournaments,
@@ -101,8 +120,12 @@ export function PersonnelPage({
   const [documentBusy, setDocumentBusy] = useState(false);
   const [documentTab, setDocumentTab] = useState<DocumentTab>("compliance");
   const [documentTargetPersonnelId, setDocumentTargetPersonnelId] = useState<string | null>(null);
+  const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null);
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [documentDraft, setDocumentDraft] = useState<DocumentDraft>(createDocumentDraft(null));
+  const [documentsPanelPersonnelId, setDocumentsPanelPersonnelId] = useState<string | null>(null);
+  const [previewDocumentUrl, setPreviewDocumentUrl] = useState<string | null>(null);
+  const documentFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [personnelDraft, setPersonnelDraft] = useState<Partial<PersonnelRecord>>({
     firstName: "",
@@ -206,6 +229,7 @@ export function PersonnelPage({
               vendor: null,
               documentDate: null,
               summary: "",
+              notes: "",
               expenses: [],
               source: "invalid_payload",
             };
@@ -221,6 +245,7 @@ export function PersonnelPage({
         financeVendor: vendor || prev.financeVendor,
         financeDate: parsed.documentDate || prev.financeDate,
         financeSummary: parsed.summary || (expenses.length ? `${expenses.length} parsed expense items` : prev.financeSummary),
+        notes: prev.notes?.trim() ? prev.notes : (parsed.notes || prev.notes),
         parsedExpenses: expenses,
       }));
       if (parsed.parserError) {
@@ -241,6 +266,7 @@ export function PersonnelPage({
     setError("");
     setRowDropHoverId(null);
     setDocumentTargetPersonnelId(personnel.id);
+    setEditingDocumentId(null);
     setDocumentFile(firstFile);
     setDocumentTab("compliance");
     setDocumentDraft(createDocumentDraft(firstFile));
@@ -249,8 +275,44 @@ export function PersonnelPage({
     await parseFinanceFromPdf(firstFile);
   }
 
+  function openDocumentsPanel(personnel: PersonnelRecord) {
+    setDocumentsPanelPersonnelId(personnel.id);
+  }
+
+  function openNewDocumentWizard(personnel: PersonnelRecord) {
+    setDocumentTargetPersonnelId(personnel.id);
+    setEditingDocumentId(null);
+    setDocumentFile(null);
+    setDocumentTab("compliance");
+    setDocumentDraft(createDocumentDraft(null));
+    setDocumentModalOpen(true);
+  }
+
+  function openEditDocumentWizard(personnel: PersonnelRecord, document: PersonnelDocument) {
+    setDocumentTargetPersonnelId(personnel.id);
+    setEditingDocumentId(document.id);
+    setDocumentFile(null);
+    setDocumentTab(document.category);
+    setDocumentDraft(createDocumentDraftFromDocument(document));
+    setDocumentModalOpen(true);
+  }
+
+  async function deleteDocument(personnel: PersonnelRecord, document: PersonnelDocument) {
+    if (!window.confirm(`Delete document "${document.name}"?`)) return;
+    setDocumentBusy(true);
+    setError("");
+    try {
+      await api.deletePersonnelDocument(personnel.id, document.id);
+      await loadAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDocumentBusy(false);
+    }
+  }
+
   async function saveDocumentRegistration() {
-    if (!documentTargetPersonnelId || !documentFile) return;
+    if (!documentTargetPersonnelId) return;
     const target = rows.find((item) => item.id === documentTargetPersonnelId);
     if (!target) return;
 
@@ -258,54 +320,35 @@ export function PersonnelPage({
     setError("");
     try {
       const category = documentTab;
-      const sizeBytes = Number.isFinite(documentFile.size) ? Number(documentFile.size) : null;
-      const now = new Date().toISOString();
-      const parsedAmount = Number(documentDraft.financeAmount.replace(",", "."));
-      const financeAmount = Number.isFinite(parsedAmount) ? parsedAmount : null;
-
-      const nextDocument: PersonnelDocument = {
-        id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
-        name: documentDraft.name.trim() || documentFile.name,
+      const payload = {
+        file: documentFile,
         category,
-        fileName: documentFile.name,
-        mimeType: documentFile.type || null,
-        sizeBytes,
-        uploadedAt: now,
-        notes: documentDraft.notes.trim() || null,
-        compliance: {
-          documentType: documentDraft.complianceType.trim() || null,
-          referenceCode: documentDraft.complianceReference.trim() || null,
-        },
-        finance: {
-          amount: financeAmount,
-          currency: documentDraft.financeCurrency.trim() || null,
-          vendor: documentDraft.financeVendor.trim() || null,
-          documentDate: documentDraft.financeDate.trim() || null,
-          summary: documentDraft.financeSummary.trim() || null,
-          parsedExpenses: documentDraft.parsedExpenses,
-        },
-        misc: {
-          tags: documentDraft.miscTags
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
-        },
+        name: documentDraft.name.trim(),
+        notes: documentDraft.notes.trim(),
+        complianceType: documentDraft.complianceType.trim(),
+        complianceReference: documentDraft.complianceReference.trim(),
+        financeAmount: documentDraft.financeAmount.trim(),
+        financeCurrency: documentDraft.financeCurrency.trim(),
+        financeVendor: documentDraft.financeVendor.trim(),
+        financeDate: documentDraft.financeDate.trim(),
+        financeSummary: documentDraft.financeSummary.trim(),
+        parsedExpenses: documentDraft.parsedExpenses,
+        miscTags: documentDraft.miscTags,
       };
 
-      const currentDocuments = Array.isArray(target.documents) ? target.documents : [];
-      const currentExpenses = Array.isArray(target.expenses) ? target.expenses : [];
-      const nextExpenses =
-        category === "finance" && documentDraft.parsedExpenses.length
-          ? [...currentExpenses, ...documentDraft.parsedExpenses]
-          : currentExpenses;
-
-      await api.updatePersonnel(target.id, {
-        documents: [...currentDocuments, nextDocument],
-        expenses: nextExpenses,
-      });
+      if (editingDocumentId) {
+        await api.updatePersonnelDocument(target.id, editingDocumentId, payload);
+      } else {
+        if (!documentFile) {
+          setError("Select a file before saving a new document.");
+          return;
+        }
+        await api.uploadPersonnelDocument(target.id, payload);
+      }
       setDocumentModalOpen(false);
       setDocumentFile(null);
       setDocumentTargetPersonnelId(null);
+      setEditingDocumentId(null);
       setDocumentDraft(createDocumentDraft(null));
       await loadAll();
     } catch (err) {
@@ -448,6 +491,9 @@ export function PersonnelPage({
                       <td>{Array.isArray(row.documents) ? row.documents.length : 0}</td>
                       <td>
                         <div className="icon-actions">
+                          <Button variant="outline" size="icon" onClick={() => openDocumentsPanel(row)} title="Manage documents">
+                            <i className="fa-solid fa-folder-open" />
+                          </Button>
                           <Button variant="outline" size="icon" onClick={() => openEditPersonnel(row)} title="Edit personnel">
                             <i className="fa-solid fa-pen-to-square" />
                           </Button>
@@ -512,7 +558,7 @@ export function PersonnelPage({
         <div className="modal-overlay" onMouseDown={() => setDocumentModalOpen(false)}>
           <Card className="modal modal-activation" onMouseDown={(event) => event.stopPropagation()}>
             <CardHeader>
-              <CardTitle>Register Document</CardTitle>
+              <CardTitle>{editingDocumentId ? "Edit Document" : "Register Document"}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="doc-tabs">
@@ -522,6 +568,40 @@ export function PersonnelPage({
               </div>
 
               <div className="modal-grid">
+                <label className="field field--wide">
+                  <span>File</span>
+                  <input
+                    ref={documentFileInputRef}
+                    type="file"
+                    accept="application/pdf"
+                    style={{ display: "none" }}
+                    onChange={(event) => setDocumentFile(event.target.files?.[0] ?? null)}
+                  />
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: "10px 12px",
+                      borderRadius: 12,
+                      border: "1px solid rgba(114, 165, 255, 0.25)",
+                      background: "rgba(5, 16, 40, 0.55)",
+                    }}
+                  >
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => documentFileInputRef.current?.click()}
+                    >
+                      <i className="fa-solid fa-paperclip" />
+                      <span>{documentFile ? "Replace PDF" : "Select PDF"}</span>
+                    </Button>
+                    <span style={{ color: "var(--text-muted)", fontSize: 14 }}>
+                      {documentFile ? documentFile.name : "No file selected"}
+                    </span>
+                  </div>
+                </label>
                 <label className="field field--wide"><span>Document Name</span><input value={documentDraft.name} onChange={(event) => setDocumentDraft((prev) => ({ ...prev, name: event.target.value }))} /></label>
                 <label className="field field--wide"><span>Notes</span><textarea value={documentDraft.notes} onChange={(event) => setDocumentDraft((prev) => ({ ...prev, notes: event.target.value }))} /></label>
 
@@ -574,11 +654,115 @@ export function PersonnelPage({
 
               <div className="modal-actions modal-actions--left">
                 <Button variant="outline" onClick={() => setDocumentModalOpen(false)}><i className="fa-solid fa-xmark" /><span>Cancel</span></Button>
-                <Button onClick={() => { void saveDocumentRegistration(); }} disabled={documentBusy || !documentFile}>
+                <Button onClick={() => { void saveDocumentRegistration(); }} disabled={documentBusy || (!documentFile && !editingDocumentId)}>
                   <i className="fa-solid fa-floppy-disk" />
-                  <span>Save Document</span>
+                  <span>{editingDocumentId ? "Save Changes" : "Save Document"}</span>
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      {documentsPanelPersonnelId ? (
+        <div className="modal-overlay" onMouseDown={() => setDocumentsPanelPersonnelId(null)}>
+          <Card className="modal modal-activation" onMouseDown={(event) => event.stopPropagation()}>
+            <CardHeader>
+              <div className="table-card__titlebar">
+                <CardTitle>Documents</CardTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const personnel = rows.find((item) => item.id === documentsPanelPersonnelId);
+                    if (personnel) openNewDocumentWizard(personnel);
+                  }}
+                >
+                  <i className="fa-solid fa-plus" />
+                  <span>New Document</span>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="data-table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Category</th>
+                      <th>Uploaded</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(rows.find((item) => item.id === documentsPanelPersonnelId)?.documents || []).map((doc) => {
+                      const personnel = rows.find((item) => item.id === documentsPanelPersonnelId);
+                      if (!personnel) return null;
+                      return (
+                        <tr key={doc.id}>
+                          <td>{doc.name}</td>
+                          <td>{doc.category}</td>
+                          <td>{doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleString() : "-"}</td>
+                          <td>
+                            <div className="icon-actions">
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                title="Preview PDF"
+                                onClick={() => setPreviewDocumentUrl(doc.fileUrl || null)}
+                                disabled={!doc.fileUrl}
+                              >
+                                <i className="fa-solid fa-eye" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                title="Edit document"
+                                onClick={() => openEditDocumentWizard(personnel, doc)}
+                              >
+                                <i className="fa-solid fa-pen-to-square" />
+                              </Button>
+                              <Button
+                                variant="danger"
+                                size="icon"
+                                title="Delete document"
+                                onClick={() => {
+                                  void deleteDocument(personnel, doc);
+                                }}
+                              >
+                                <i className="fa-solid fa-trash" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      {previewDocumentUrl ? (
+        <div className="modal-overlay" onMouseDown={() => setPreviewDocumentUrl(null)}>
+          <Card className="modal modal-activation" onMouseDown={(event) => event.stopPropagation()}>
+            <CardHeader>
+              <div className="table-card__titlebar">
+                <CardTitle>PDF Preview</CardTitle>
+                <Button variant="outline" size="sm" onClick={() => setPreviewDocumentUrl(null)}>
+                  <i className="fa-solid fa-xmark" />
+                  <span>Close</span>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <iframe
+                src={previewDocumentUrl}
+                title="Document preview"
+                style={{ width: "100%", height: "70vh", border: "1px solid rgba(114, 165, 255, 0.25)", borderRadius: 12 }}
+              />
             </CardContent>
           </Card>
         </div>
