@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { PHASES } from "../lib/api";
-import type { Activation, CueEvent, PhaseKey } from "../lib/api";
+import type { Activation, CueEvent, EventPhase } from "../lib/api";
 import { Button } from "./ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { UnsavedChangesModal } from "./UnsavedChangesModal";
 
 export type EventDraft = {
-  phase: PhaseKey;
+  phase: string;
   category: string;
   cue: string;
   asset: string;
@@ -26,6 +26,7 @@ type Props = {
   title: string;
   draft: EventDraft;
   activationOptions?: Activation[];
+  phaseOptions?: readonly EventPhase[];
   screenOptions?: ScreenOption[];
   onChange: (next: EventDraft) => void;
   onClose: () => void;
@@ -35,7 +36,7 @@ type Props = {
 };
 
 export const emptyDraft: EventDraft = {
-  phase: "GATES_OPEN",
+  phase: PHASES[0].key,
   category: "",
   cue: "",
   asset: "",
@@ -69,6 +70,7 @@ export function EventFormModal({
   title,
   draft,
   activationOptions = [],
+  phaseOptions = PHASES,
   screenOptions = [],
   onChange,
   onClose,
@@ -138,6 +140,17 @@ export function EventFormModal({
     onClose();
   }
 
+  useEffect(() => {
+    if (!open || confirmCloseOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      requestClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, confirmCloseOpen, busy, hasUnsavedChanges, onClose]);
+
   if (!open) return null;
 
   return (
@@ -183,7 +196,7 @@ export function EventFormModal({
                       onChange({ ...draft, phase: event.target.value as EventDraft["phase"] })
                     }
                   >
-                    {PHASES.map((phase) => (
+                    {phaseOptions.map((phase) => (
                       <option key={phase.key} value={phase.key}>
                         {phase.label}
                       </option>

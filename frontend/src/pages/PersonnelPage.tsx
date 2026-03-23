@@ -398,6 +398,47 @@ export function PersonnelPage({
     }
   }
 
+  useEffect(() => {
+    const hasAnyModalOpen =
+      Boolean(previewDocumentUrl) ||
+      Boolean(documentsPanelPersonnelId) ||
+      documentModalOpen ||
+      personnelModalOpen;
+    if (!hasAnyModalOpen) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (previewDocumentUrl) {
+        setPreviewDocumentUrl(null);
+        return;
+      }
+      if (documentsPanelPersonnelId) {
+        setDocumentsPanelPersonnelId(null);
+        return;
+      }
+      if (documentModalOpen) {
+        if (documentBusy) return;
+        setDocumentModalOpen(false);
+        return;
+      }
+      if (personnelModalOpen) {
+        if (busy) return;
+        setPersonnelModalOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    previewDocumentUrl,
+    documentsPanelPersonnelId,
+    documentModalOpen,
+    personnelModalOpen,
+    documentBusy,
+    busy,
+  ]);
+
   if (!pageAccess.personnel) {
     return (
       <div className="page-shell">

@@ -1,12 +1,18 @@
 export const PHASES = [
-  { key: "GATES_OPEN", label: "Gates Open" },
-  { key: "KICK_OFF", label: "Kick Off (Local Time)" },
-  { key: "HT_HALF_TIME", label: "HT-Half Time" },
-  { key: "SECOND_HALF_KICK_OFF", label: "2nd HALF KICK OFF (Local Time)" },
-  { key: "FULL_TIME", label: "FULL TIME" },
+  { key: "GATES_OPEN", label: "Gates Open", offsetMinutes: -120 },
+  { key: "KICK_OFF", label: "Kick Off (Local Time)", offsetMinutes: 0 },
+  { key: "HT_HALF_TIME", label: "Half Time", offsetMinutes: 45 },
+  { key: "SECOND_HALF_KICK_OFF", label: "Kick Off 2nd Half (Local Time)", offsetMinutes: 60 },
+  { key: "FULL_TIME", label: "Full Time", offsetMinutes: 105 },
 ] as const;
 
-export type PhaseKey = (typeof PHASES)[number]["key"];
+export type EventPhase = {
+  key: string;
+  label: string;
+  offsetMinutes: number;
+};
+
+export type PhaseKey = string;
 
 export type MatchTeam = {
   name?: string | null;
@@ -156,6 +162,26 @@ export type Tournament = {
   format?: string | null;
   teamsCount?: number | null;
   hostCountries: string[];
+  eventPhases: EventPhase[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TeamPlayer = {
+  id: string;
+  name: string;
+  number?: number | null;
+  position?: string | null;
+};
+
+export type Team = {
+  id: string;
+  tournamentId?: string | null;
+  name: string;
+  country?: string | null;
+  tricode?: string | null;
+  logoUrl?: string | null;
+  players: TeamPlayer[];
   createdAt: string;
   updatedAt: string;
 };
@@ -164,6 +190,7 @@ export type PageKey =
   | "events"
   | "activations"
   | "venues"
+  | "teams"
   | "tournaments"
   | "personnel"
   | "cuesheet";
@@ -408,6 +435,7 @@ export const api = {
     format?: string | null;
     teamsCount?: number | null;
     hostCountries?: string[];
+    eventPhases?: EventPhase[];
   }) =>
     parseResponse<Tournament>(
       authedFetch("/api/tournaments", {
@@ -429,6 +457,7 @@ export const api = {
       format?: string | null;
       teamsCount?: number | null;
       hostCountries?: string[];
+      eventPhases?: EventPhase[];
     },
   ) =>
     parseResponse<Tournament>(
@@ -501,6 +530,51 @@ export const api = {
   },
   getVenues: (tournamentId?: string | null) =>
     parseResponse<Venue[]>(authedFetch(withTournamentQuery("/api/venues", tournamentId))),
+  getTeams: (tournamentId?: string | null) =>
+    parseResponse<Team[]>(authedFetch(withTournamentQuery("/api/teams", tournamentId))),
+  createTeam: (payload: {
+    name: string;
+    tournamentId?: string;
+    country?: string | null;
+    tricode?: string | null;
+    logoUrl?: string | null;
+    players?: Array<{
+      id?: string;
+      name: string;
+      number?: number | null;
+      position?: string | null;
+    }>;
+  }) =>
+    parseResponse<Team>(
+      authedFetch(withTournamentQuery("/api/teams", payload.tournamentId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  updateTeam: (
+    teamId: string,
+    payload: Partial<{
+      name: string;
+      country: string | null;
+      tricode: string | null;
+      logoUrl: string | null;
+      players: TeamPlayer[];
+    }>,
+  ) =>
+    parseResponse<Team>(
+      authedFetch(`/api/teams/${teamId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  deleteTeam: (teamId: string) =>
+    parseResponse<Team>(
+      authedFetch(`/api/teams/${teamId}`, {
+        method: "DELETE",
+      }),
+    ),
   createVenue: (payload: {
     name: string;
     tournamentId?: string;

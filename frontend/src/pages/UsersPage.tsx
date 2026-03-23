@@ -25,6 +25,7 @@ const PRIVILEGE_GROUPS = [
   { page: "events", label: "Events", actions: ["view", "create", "edit", "delete", "import"] },
   { page: "activations", label: "Activations", actions: ["view", "create", "edit", "delete", "upload"] },
   { page: "venues", label: "Venues", actions: ["view", "create", "edit", "delete"] },
+  { page: "teams", label: "Teams", actions: ["view", "create", "edit", "delete"] },
   { page: "tournaments", label: "Tournaments", actions: ["view", "create", "edit", "delete"] },
   { page: "cuesheet", label: "CueSheet", actions: ["view", "edit", "import", "reorder"] },
   {
@@ -164,6 +165,17 @@ export function UsersPage({
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!userModalOpen || busy) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setUserModalOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [userModalOpen, busy]);
 
   return (
     <div className="page-shell">

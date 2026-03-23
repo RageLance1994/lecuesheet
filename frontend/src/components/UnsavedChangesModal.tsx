@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Button } from "./ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 
@@ -9,6 +10,17 @@ type Props = {
 };
 
 export function UnsavedChangesModal({ open, onCancel, onConfirm, busy }: Props) {
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || busy) return;
+      event.preventDefault();
+      onCancel();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, busy, onCancel]);
+
   if (!open) return null;
 
   return (

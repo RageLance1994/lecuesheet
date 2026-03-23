@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "./ui/Button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/Card";
-import type { MatchInfoDraft, Venue } from "../lib/api";
+import type { MatchInfoDraft, Team, Venue } from "../lib/api";
 import { UnsavedChangesModal } from "./UnsavedChangesModal";
 
 type Props = {
   open: boolean;
   draft: MatchInfoDraft;
   venueOptions?: Venue[];
+  teamOptions?: Team[];
+  onRegisterTeam?: () => void;
   onChange: (next: MatchInfoDraft) => void;
   onClose: () => void;
   onSubmit: () => void;
@@ -51,10 +53,140 @@ function TeamAvatar({ name, logoUrl }: { name: string; logoUrl: string }) {
   return <span className="planner-avatar__fallback">{initials}</span>;
 }
 
+function TeamComboBox({
+  valueId,
+  options,
+  disabled,
+  placeholder,
+  onSelect,
+}: {
+  valueId: string;
+  options: Team[];
+  disabled?: boolean;
+  placeholder?: string;
+  onSelect: (teamId: string) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const selected = options.find((team) => team.id === valueId) ?? null;
+
+  useEffect(() => {
+    function onMouseDown(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, []);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = options.filter((team) => {
+    if (!normalizedQuery) return true;
+    const name = String(team.name || "").toLowerCase();
+    const tricode = String(team.tricode || "").toLowerCase();
+    const country = String(team.country || "").toLowerCase();
+    return name.includes(normalizedQuery) || tricode.includes(normalizedQuery) || country.includes(normalizedQuery);
+  });
+
+  return (
+    <div className="team-combobox" ref={rootRef}>
+      <button
+        type="button"
+        className="team-combobox__trigger"
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          setOpen((state) => !state);
+          setQuery("");
+        }}
+      >
+        <span className="team-combobox__trigger-main">
+          {selected?.logoUrl ? (
+            <img className="team-combobox__logo" src={selected.logoUrl} alt="" />
+          ) : (
+            <span className="team-combobox__logo-fallback" aria-hidden>
+              <i className="fa-solid fa-shield-halved" />
+            </span>
+          )}
+          <span>{selected ? `${selected.name}${selected.tricode ? ` (${selected.tricode})` : ""}` : (placeholder || "Select team")}</span>
+        </span>
+        <i className={`fa-solid ${open ? "fa-chevron-up" : "fa-chevron-down"} team-combobox__caret`} />
+      </button>
+
+      {open ? (
+        <div className="team-combobox__menu">
+          <div className="team-combobox__search-wrap">
+            <input
+              className="team-combobox__search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search team, code, country..."
+              autoFocus
+            />
+          </div>
+          <button
+            type="button"
+            className={`team-combobox__item ${!valueId ? "is-selected" : ""}`}
+            onClick={() => {
+              onSelect("");
+              setOpen(false);
+              setQuery("");
+            }}
+          >
+            <span className="team-combobox__item-copy">
+              <strong>No team selected</strong>
+              <small>Clear current value</small>
+            </span>
+          </button>
+          {filtered.map((team) => {
+            const isSelected = team.id === valueId;
+            return (
+              <button
+                key={team.id}
+                type="button"
+                className={`team-combobox__item ${isSelected ? "is-selected" : ""}`}
+                onClick={() => {
+                  onSelect(team.id);
+                  setOpen(false);
+                  setQuery("");
+                }}
+              >
+                <span className="team-combobox__item-main">
+                  {team.logoUrl ? (
+                    <img className="team-combobox__logo" src={team.logoUrl} alt="" />
+                  ) : (
+                    <span className="team-combobox__logo-fallback" aria-hidden>
+                      <i className="fa-solid fa-shield-halved" />
+                    </span>
+                  )}
+                  <span className="team-combobox__item-copy">
+                    <strong>{team.name}</strong>
+                    <small>
+                      {team.tricode || "-"}{team.country ? ` • ${team.country}` : ""}
+                    </small>
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+          {filtered.length === 0 ? (
+            <div className="team-combobox__empty">No team matches your search.</div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function MatchPlannerModal({
   open,
   draft,
   venueOptions = [],
+  teamOptions = [],
+  onRegisterTeam,
   onChange,
   onClose,
   onSubmit,
@@ -104,6 +236,58 @@ export function MatchPlannerModal({
     setStep((next) => Math.min(next + 1, STEPS.length - 1));
   }
 
+  function selectTeam(side: "A" | "B", teamId: string) {
+    if (!teamId) {
+      if (side === "A") {
+        onChange({
+          ...draft,
+          teamAName: "",
+          teamACode: "",
+          teamALogoUrl: "",
+        });
+      } else {
+        onChange({
+          ...draft,
+          teamBName: "",
+          teamBCode: "",
+          teamBLogoUrl: "",
+        });
+      }
+      return;
+    }
+
+    const team = teamOptions.find((item) => item.id === teamId);
+    if (!team) return;
+    if (side === "A") {
+      onChange({
+        ...draft,
+        teamAName: team.name || "",
+        teamACode: team.tricode || "",
+        teamALogoUrl: team.logoUrl || "",
+      });
+      return;
+    }
+    onChange({
+      ...draft,
+      teamBName: team.name || "",
+      teamBCode: team.tricode || "",
+      teamBLogoUrl: team.logoUrl || "",
+    });
+  }
+
+  const selectedTeamAId =
+    teamOptions.find(
+      (team) =>
+        (team.name || "").trim() === draft.teamAName.trim() &&
+        (team.tricode || "").trim() === draft.teamACode.trim(),
+    )?.id || "";
+  const selectedTeamBId =
+    teamOptions.find(
+      (team) =>
+        (team.name || "").trim() === draft.teamBName.trim() &&
+        (team.tricode || "").trim() === draft.teamBCode.trim(),
+    )?.id || "";
+
   const hasUnsavedChanges = JSON.stringify(draft) !== initialDraftJson;
 
   function requestClose() {
@@ -114,6 +298,17 @@ export function MatchPlannerModal({
     }
     onClose();
   }
+
+  useEffect(() => {
+    if (!open || confirmCloseOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      requestClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, confirmCloseOpen, busy, hasUnsavedChanges, onClose]);
 
   return (
     <>
@@ -218,32 +413,20 @@ export function MatchPlannerModal({
                       </div>
                       <div className="planner-fields planner-fields--stacked">
                         <label className="field">
-                          <span>Team A name</span>
-                          <input
-                            value={draft.teamAName}
-                            onChange={(event) => updateField("teamAName", event.target.value)}
-                            disabled={busy}
-                            placeholder="Home Team"
+                          <span>Team A</span>
+                          <TeamComboBox
+                            valueId={selectedTeamAId}
+                            options={teamOptions}
+                            disabled={busy || teamOptions.length === 0}
+                            placeholder="Select Team A"
+                            onSelect={(teamId) => selectTeam("A", teamId)}
                           />
                         </label>
-                        <label className="field">
-                          <span>Team A code</span>
-                          <input
-                            value={draft.teamACode}
-                            onChange={(event) => updateField("teamACode", event.target.value)}
-                            disabled={busy}
-                            placeholder="PSG"
-                          />
-                        </label>
-                        <label className="field">
-                          <span>Team A logo URL</span>
-                          <input
-                            value={draft.teamALogoUrl}
-                            onChange={(event) => updateField("teamALogoUrl", event.target.value)}
-                            disabled={busy}
-                            placeholder="https://..."
-                          />
-                        </label>
+                        <div className="planner-summary-card">
+                          <strong>{draft.teamAName || "-"}</strong>
+                          <span>{draft.teamACode || "-"}</span>
+                          <span>{draft.teamALogoUrl ? "Logo linked" : "No logo set"}</span>
+                        </div>
                       </div>
                     </div>
 
@@ -254,32 +437,33 @@ export function MatchPlannerModal({
                       </div>
                       <div className="planner-fields planner-fields--stacked">
                         <label className="field">
-                          <span>Team B name</span>
-                          <input
-                            value={draft.teamBName}
-                            onChange={(event) => updateField("teamBName", event.target.value)}
-                            disabled={busy}
-                            placeholder="Away Team"
+                          <span>Team B</span>
+                          <TeamComboBox
+                            valueId={selectedTeamBId}
+                            options={teamOptions}
+                            disabled={busy || teamOptions.length === 0}
+                            placeholder="Select Team B"
+                            onSelect={(teamId) => selectTeam("B", teamId)}
                           />
                         </label>
-                        <label className="field">
-                          <span>Team B code</span>
-                          <input
-                            value={draft.teamBCode}
-                            onChange={(event) => updateField("teamBCode", event.target.value)}
-                            disabled={busy}
-                            placeholder="CHE"
-                          />
-                        </label>
-                        <label className="field">
-                          <span>Team B logo URL</span>
-                          <input
-                            value={draft.teamBLogoUrl}
-                            onChange={(event) => updateField("teamBLogoUrl", event.target.value)}
-                            disabled={busy}
-                            placeholder="https://..."
-                          />
-                        </label>
+                        <div className="planner-summary-card">
+                          <strong>{draft.teamBName || "-"}</strong>
+                          <span>{draft.teamBCode || "-"}</span>
+                          <span>{draft.teamBLogoUrl ? "Logo linked" : "No logo set"}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="planner-field--wide">
+                      <div className="modal-actions modal-actions--left">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => onRegisterTeam?.()}
+                          disabled={busy}
+                        >
+                          <i className="fa-solid fa-shield-halved" />
+                          <span>Register Team</span>
+                        </Button>
                       </div>
                     </div>
                   </div>

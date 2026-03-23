@@ -217,6 +217,17 @@ export function VenuesPage({
     setOpen(false);
   }
 
+  useEffect(() => {
+    if (!open || confirmCloseOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      requestCloseModal();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, confirmCloseOpen, busy, hasUnsavedChanges]);
+
   return (
     <div className="page-shell">
       <AppSidebar

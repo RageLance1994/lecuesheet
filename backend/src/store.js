@@ -38,14 +38,14 @@ function createDefaultMatchInfo() {
 }
 
 export const PHASES = [
-  { key: "GATES_OPEN", label: "Gates Open", start: "13:00:00" },
-  { key: "KICK_OFF", label: "Kick Off (Local Time)", start: "15:00:00" },
-  { key: "HT_HALF_TIME", label: "HT-Half Time", start: "15:45:00" },
-  { key: "SECOND_HALF_KICK_OFF", label: "2nd Half Kick Off (Local Time)", start: "16:00:00" },
-  { key: "FULL_TIME", label: "Full Time", start: "16:45:00" },
+  { key: "GATES_OPEN", label: "Gates Open", offsetMinutes: -120 },
+  { key: "KICK_OFF", label: "Kick Off (Local Time)", offsetMinutes: 0 },
+  { key: "HT_HALF_TIME", label: "Half Time", offsetMinutes: 45 },
+  { key: "SECOND_HALF_KICK_OFF", label: "Kick Off 2nd Half (Local Time)", offsetMinutes: 60 },
+  { key: "FULL_TIME", label: "Full Time", offsetMinutes: 105 },
 ];
-
-const PHASE_ORDER = PHASES.map((phase) => phase.key);
+const DEFAULT_EVENT_PHASES = PHASES;
+const DEFAULT_KICKOFF_SECONDS = 15 * 3600;
 
 const DEFAULT_METADATA = {
   name: "Live Engine Cue Sheet",
@@ -59,6 +59,7 @@ const DEFAULT_STATE = {
   events: [],
   venues: [],
   activations: [],
+  teams: [],
   tournaments: [],
   users: [],
   personnel: [],
@@ -68,6 +69,7 @@ const PAGE_ACTIONS = {
   events: ["view", "create", "edit", "delete", "import"],
   activations: ["view", "create", "edit", "delete", "upload"],
   venues: ["view", "create", "edit", "delete"],
+  teams: ["view", "create", "edit", "delete"],
   tournaments: ["view", "create", "edit", "delete"],
   personnel: ["view", "create", "edit", "delete", "manageUsers", "managePrivileges"],
   cuesheet: ["view", "edit", "import", "reorder"],
@@ -125,6 +127,81 @@ function sanitizeOptionalText(value) {
 function sanitizeStringArray(value) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => sanitizeText(item)).filter(Boolean);
+}
+
+function normalizePhaseKey(value, index) {
+  const text = sanitizeText(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return text || `PHASE_${index + 1}`;
+}
+
+function parseClockToSeconds(value) {
+  const text = sanitizeText(value);
+  if (/^\d{2}:\d{2}$/.test(text)) {
+    const [h, m] = text.split(":").map(Number);
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) return h * 3600 + m * 60;
+  }
+  if (/^\d{2}:\d{2}:\d{2}$/.test(text)) {
+    const [h, m, s] = text.split(":").map(Number);
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59 && s >= 0 && s <= 59) return h * 3600 + m * 60 + s;
+  }
+  return null;
+}
+
+function normalizeEventPhase(item, index) {
+  const source = item && typeof item === "object" ? item : {};
+  const fallbackOffset = Number(DEFAULT_EVENT_PHASES[index]?.offsetMinutes ?? 0);
+  const key = normalizePhaseKey(source.key ?? source.label, index);
+  const label = sanitizeText(source.label) || key.replaceAll("_", " ");
+  const explicitOffset = Number(source.offsetMinutes);
+  const legacyStartSeconds = parseClockToSeconds(source.start);
+  const legacyKickoffSeconds = parseClockToSeconds(source.kickoffStart);
+  const kickoffReference = legacyKickoffSeconds ?? DEFAULT_KICKOFF_SECONDS;
+  const derivedOffset = legacyStartSeconds === null
+    ? null
+    : Math.round((legacyStartSeconds - kickoffReference) / 60);
+  return {
+    key,
+    label,
+    offsetMinutes: Number.isFinite(explicitOffset)
+      ? Math.round(explicitOffset)
+      : (derivedOffset ?? fallbackOffset),
+  };
+}
+
+function normalizeEventPhases(phases) {
+  const source = Array.isArray(phases) && phases.length > 0 ? phases : DEFAULT_EVENT_PHASES;
+  const dedupe = new Set();
+  const normalized = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const phase = normalizeEventPhase(source[index], index);
+    if (dedupe.has(phase.key)) continue;
+    dedupe.add(phase.key);
+    normalized.push(phase);
+  }
+  return normalized.length > 0 ? normalized : structuredClone(DEFAULT_EVENT_PHASES);
+}
+
+function phaseOrderFromPhases(eventPhases) {
+  return normalizeEventPhases(eventPhases).map((phase) => phase.key);
+}
+
+function kickoffBaseSecondsFromPhases(eventPhases, kickoffTime = null) {
+  const parsedKickoff = parseClockToSeconds(kickoffTime);
+  if (parsedKickoff !== null) return parsedKickoff;
+  const kickoffPhase = findPhaseByKeywords(eventPhases, ["KICK OFF", "KICKOFF", "TIP OFF", "TIPOFF"]);
+  const kickoffOffset = Number(kickoffPhase?.offsetMinutes ?? 0);
+  return DEFAULT_KICKOFF_SECONDS - kickoffOffset * 60;
+}
+
+function findPhaseByKeywords(eventPhases, keywords) {
+  const phases = normalizeEventPhases(eventPhases);
+  return phases.find((phase) => {
+    const haystack = `${phase.key} ${phase.label}`.toUpperCase();
+    return keywords.some((keyword) => haystack.includes(keyword));
+  });
 }
 
 function normalizeMatchTeam(team) {
@@ -264,22 +341,36 @@ function normalizeScreenTarget(item) {
   };
 }
 
-function phaseFromCue(cue) {
+function phaseFromCue(cue, eventPhases = DEFAULT_EVENT_PHASES) {
   const text = sanitizeText(cue).toUpperCase();
-  if (!text) return "GATES_OPEN";
-  if (text.includes("FULL TIME")) return "FULL_TIME";
-  if (text.includes("2ND HALF") || text.includes("SECOND HALF")) {
-    return "SECOND_HALF_KICK_OFF";
+  const phases = normalizeEventPhases(eventPhases);
+  const fallback = phases[0]?.key || "GATES_OPEN";
+  if (!text) return fallback;
+
+  if (text.includes("FULL TIME") || text.includes("FINAL") || text.includes("END OF GAME")) {
+    return findPhaseByKeywords(phases, ["FULL TIME", "FINAL", "END OF GAME"])?.key || fallback;
   }
-  if (text.includes("HALF TIME") || text.includes("HT")) return "HT_HALF_TIME";
-  if (text.includes("KICK OFF")) return "KICK_OFF";
-  return "GATES_OPEN";
+  if (text.includes("2ND HALF") || text.includes("SECOND HALF") || text.includes("Q3") || text.includes("3RD QUARTER")) {
+    return findPhaseByKeywords(phases, ["2ND HALF", "SECOND HALF", "Q3", "3RD QUARTER"])?.key || fallback;
+  }
+  if (text.includes("HALF TIME") || text.includes("HALFTIME") || text.includes("HT") || text.includes("INTERVAL")) {
+    return findPhaseByKeywords(phases, ["HALF TIME", "HALFTIME", "HT", "INTERVAL"])?.key || fallback;
+  }
+  if (text.includes("KICK OFF") || text.includes("KICKOFF") || text.includes("TIP OFF") || text.includes("TIPOFF")) {
+    return findPhaseByKeywords(phases, ["KICK OFF", "KICKOFF", "TIP OFF", "TIPOFF", "START"])?.key || fallback;
+  }
+  if (text.includes("GATES OPEN") || text.includes("DOORS OPEN") || text.includes("PREGAME") || text.includes("PRE GAME")) {
+    return findPhaseByKeywords(phases, ["GATES OPEN", "DOORS OPEN", "PREGAME", "PRE GAME"])?.key || fallback;
+  }
+
+  return fallback;
 }
 
-function phaseStartSeconds(phaseKey) {
-  const phase = PHASES.find((item) => item.key === phaseKey) ?? PHASES[0];
-  const [h, m, s] = phase.start.split(":").map(Number);
-  return h * 3600 + m * 60 + s;
+function phaseStartSeconds(phaseKey, eventPhases = DEFAULT_EVENT_PHASES, kickoffBaseSeconds = DEFAULT_KICKOFF_SECONDS) {
+  const phases = normalizeEventPhases(eventPhases);
+  const phase = phases.find((item) => item.key === phaseKey) ?? phases[0];
+  const offsetMinutes = Number(phase?.offsetMinutes ?? 0);
+  return kickoffBaseSeconds + Math.round(offsetMinutes) * 60;
 }
 
 function formatSeconds(totalSeconds) {
@@ -290,8 +381,9 @@ function formatSeconds(totalSeconds) {
   return `${h}:${m}:${s}`;
 }
 
-function normalizeRow(event, actor, rowOrder) {
-  const phase = PHASE_ORDER.includes(event.phase) ? event.phase : phaseFromCue(event.cue);
+function normalizeRow(event, actor, rowOrder, eventPhases = DEFAULT_EVENT_PHASES) {
+  const phaseOrder = phaseOrderFromPhases(eventPhases);
+  const phase = phaseOrder.includes(event.phase) ? event.phase : phaseFromCue(event.cue, eventPhases);
   return {
     id: event.id ?? randomUUID(),
     rowOrder,
@@ -316,17 +408,19 @@ function normalizeRow(event, actor, rowOrder) {
   };
 }
 
-function rebuildTimeline(rows) {
-  const counters = new Map(PHASE_ORDER.map((key) => [key, 0]));
+function rebuildTimeline(rows, eventPhases = DEFAULT_EVENT_PHASES, kickoffTime = null) {
+  const phaseOrder = phaseOrderFromPhases(eventPhases);
+  const kickoffBaseSeconds = kickoffBaseSecondsFromPhases(eventPhases, kickoffTime);
+  const counters = new Map(phaseOrder.map((key) => [key, 0]));
   return rows.map((row, index) => {
-    const phase = PHASE_ORDER.includes(row.phase) ? row.phase : phaseFromCue(row.cue);
+    const phase = phaseOrder.includes(row.phase) ? row.phase : phaseFromCue(row.cue, eventPhases);
     const offset = counters.get(phase) ?? 0;
     counters.set(phase, offset + 1);
     return {
       ...row,
       phase,
       rowOrder: index,
-      timecode: formatSeconds(phaseStartSeconds(phase) + offset * 30),
+      timecode: formatSeconds(phaseStartSeconds(phase, eventPhases, kickoffBaseSeconds) + offset * 30),
     };
   });
 }
@@ -349,10 +443,14 @@ function createEventRecord({
   versions,
   createdAt,
   updatedAt,
+  eventPhases,
 }) {
   const safeMetadata = normalizeMetadata(metadata);
+  const safeEventPhases = normalizeEventPhases(eventPhases);
   const normalizedRows = rebuildTimeline(
-    (rows ?? []).map((row, index) => normalizeRow(row, "system", index)),
+    (rows ?? []).map((row, index) => normalizeRow(row, "system", index, safeEventPhases)),
+    safeEventPhases,
+    safeMetadata.match?.kickoffTime ?? null,
   );
   return {
     id: id || randomUUID(),
@@ -366,9 +464,9 @@ function createEventRecord({
   };
 }
 
-function normalizeEventRecord(record) {
+function normalizeEventRecord(record, eventPhases = DEFAULT_EVENT_PHASES) {
   if (!record || typeof record !== "object") {
-    return createEventRecord({});
+    return createEventRecord({ eventPhases });
   }
   return createEventRecord({
     id: record.id,
@@ -379,6 +477,7 @@ function normalizeEventRecord(record) {
     versions: record.versions,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+    eventPhases,
   });
 }
 
@@ -398,6 +497,7 @@ function normalizeTournament(tournament) {
     format: normalizedFormat,
     teamsCount: Number.isFinite(Number(source.teamsCount)) ? Number(source.teamsCount) : null,
     hostCountries: sanitizeStringArray(source.hostCountries),
+    eventPhases: normalizeEventPhases(source.eventPhases),
     createdAt: source.createdAt || nowIso(),
     updatedAt: source.updatedAt || nowIso(),
   };
@@ -558,6 +658,34 @@ function normalizePersonnelEntry(entry) {
   };
 }
 
+function normalizeTeamPlayer(player) {
+  const source = player && typeof player === "object" ? player : {};
+  const number = Number(source.number);
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    name: sanitizeText(source.name) || "Player",
+    number: Number.isFinite(number) && number >= 0 ? Math.round(number) : null,
+    position: sanitizeOptionalText(source.position),
+  };
+}
+
+function normalizeTeam(team) {
+  const source = team && typeof team === "object" ? team : {};
+  return {
+    id: sanitizeText(source.id) || randomUUID(),
+    tournamentId: sanitizeOptionalText(source.tournamentId),
+    name: sanitizeText(source.name) || "Untitled Team",
+    country: sanitizeOptionalText(source.country),
+    tricode: sanitizeOptionalText(source.tricode)?.toUpperCase() ?? null,
+    logoUrl: sanitizeOptionalText(source.logoUrl),
+    players: Array.isArray(source.players)
+      ? source.players.map((item) => normalizeTeamPlayer(item))
+      : [],
+    createdAt: source.createdAt || nowIso(),
+    updatedAt: source.updatedAt || nowIso(),
+  };
+}
+
 function createDefaultTournament() {
   return normalizeTournament({
     id: DEFAULT_TOURNAMENT_ID,
@@ -580,6 +708,16 @@ function resolveTournamentId(state, requestedTournamentId = null) {
     return requested;
   }
   return tournaments[0]?.id ?? DEFAULT_TOURNAMENT_ID;
+}
+
+function getTournamentById(state, tournamentId = null) {
+  const tournaments = ensureTournamentList(state.tournaments);
+  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+  return tournaments.find((item) => item.id === selectedTournamentId) ?? tournaments[0] ?? createDefaultTournament();
+}
+
+function getEventPhasesForTournament(state, tournamentId = null) {
+  return normalizeEventPhases(getTournamentById(state, tournamentId)?.eventPhases);
 }
 
 function resolveTournamentIdForList(state, requestedTournamentId = null) {
@@ -615,6 +753,7 @@ function migrateLegacyState(parsed) {
     events: [record],
     venues: [],
     activations: [],
+    teams: [],
     tournaments: [createDefaultTournament()],
     users: [createDefaultSuperAdmin()],
     personnel: [],
@@ -628,12 +767,18 @@ function normalizeState(parsed) {
 
   if (Array.isArray(parsed.events) && parsed.events.length > 0 && parsed.events[0]?.rows) {
     const tournaments = ensureTournamentList(parsed.tournaments);
+    const tournamentMap = new Map(tournaments.map((item) => [item.id, item]));
     return {
-      events: parsed.events.map((eventRecord) => normalizeEventRecord(eventRecord)),
+      events: parsed.events.map((eventRecord) => {
+        const tid = sanitizeText(eventRecord?.tournamentId);
+        const phases = tournamentMap.get(tid)?.eventPhases ?? DEFAULT_EVENT_PHASES;
+        return normalizeEventRecord(eventRecord, phases);
+      }),
       venues: Array.isArray(parsed.venues) ? parsed.venues.map((venue) => normalizeVenue(venue)) : [],
       activations: Array.isArray(parsed.activations)
         ? parsed.activations.map((activation) => normalizeActivation(activation))
         : [],
+      teams: Array.isArray(parsed.teams) ? parsed.teams.map((team) => normalizeTeam(team)) : [],
       tournaments,
       users: ensureUserList(parsed.users),
       personnel: Array.isArray(parsed.personnel)
@@ -650,6 +795,7 @@ function normalizeState(parsed) {
       activations: Array.isArray(parsed.activations)
         ? parsed.activations.map((activation) => normalizeActivation(activation))
         : [],
+      teams: Array.isArray(parsed.teams) ? parsed.teams.map((team) => normalizeTeam(team)) : [],
       tournaments,
       users: ensureUserList(parsed.users),
       personnel: Array.isArray(parsed.personnel)
@@ -750,6 +896,58 @@ export async function createVenue(payload, actor, tournamentId = null) {
   return next;
 }
 
+export async function listTeams(tournamentId = null) {
+  const state = await readState();
+  const selectedTournamentId = resolveTournamentIdForList(state, tournamentId);
+  if (!selectedTournamentId) return [];
+  const fallbackTournamentId = resolveTournamentId(state, null);
+  return (state.teams ?? [])
+    .filter(
+      (team) => withTournamentFallback(team.tournamentId, fallbackTournamentId) === selectedTournamentId,
+    )
+    .map((team) => normalizeTeam(team))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function createTeam(payload, actor, tournamentId = null) {
+  const state = await readState();
+  const selectedTournamentId = resolveTournamentId(state, tournamentId);
+  const next = normalizeTeam({ ...payload, tournamentId: selectedTournamentId });
+  next.updatedAt = nowIso();
+  next.createdAt = next.createdAt || next.updatedAt;
+  state.teams = [...(state.teams ?? []), next];
+  await writeState(state);
+  return next;
+}
+
+export async function updateTeam(teamId, payload, actor) {
+  const state = await readState();
+  const index = (state.teams ?? []).findIndex((team) => team.id === teamId);
+  if (index === -1) return null;
+
+  const current = normalizeTeam(state.teams[index]);
+  const merged = normalizeTeam({
+    ...current,
+    ...payload,
+    id: current.id,
+    createdAt: current.createdAt,
+  });
+  merged.updatedAt = nowIso();
+
+  state.teams[index] = merged;
+  await writeState(state);
+  return merged;
+}
+
+export async function deleteTeam(teamId) {
+  const state = await readState();
+  const index = (state.teams ?? []).findIndex((team) => team.id === teamId);
+  if (index === -1) return null;
+  const [removed] = state.teams.splice(index, 1);
+  await writeState(state);
+  return normalizeTeam(removed);
+}
+
 export async function listActivations(tournamentId = null) {
   const state = await readState();
   const selectedTournamentId = resolveTournamentIdForList(state, tournamentId);
@@ -813,6 +1011,7 @@ export async function getPlannerEventSnapshot(eventId) {
 export async function createPlannerEvent(payload, actor) {
   const state = await readState();
   const selectedTournamentId = resolveTournamentId(state, payload?.tournamentId ?? null);
+  const eventPhases = getEventPhasesForTournament(state, selectedTournamentId);
   const baseName = sanitizeText(payload?.name);
   const metadata = normalizeMetadata({
     name: "Live Engine Cue Sheet",
@@ -824,6 +1023,7 @@ export async function createPlannerEvent(payload, actor) {
     metadata,
     rows: [],
     versions: [],
+    eventPhases,
   });
 
   pushVersion(record, {
@@ -936,6 +1136,9 @@ export async function deleteTournament(tournamentId, actor) {
   state.activations = state.activations.filter(
     (item) => withTournamentFallback(item.tournamentId, fallbackTournamentId) !== tournamentId,
   );
+  state.teams = state.teams.filter(
+    (item) => withTournamentFallback(item.tournamentId, fallbackTournamentId) !== tournamentId,
+  );
   state.tournaments = tournaments.length > 0 ? tournaments : [createDefaultTournament()];
   await writeState(state);
   return removed;
@@ -945,9 +1148,12 @@ export async function replaceCuesheet(eventId, { rows, sourceFile, actor }) {
   const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
+  const eventPhases = getEventPhasesForTournament(state, record.tournamentId);
 
   const normalizedRows = rebuildTimeline(
-    (rows ?? []).map((row, index) => normalizeRow(row, actor, index)),
+    (rows ?? []).map((row, index) => normalizeRow(row, actor, index, eventPhases)),
+    eventPhases,
+    record.metadata?.match?.kickoffTime ?? null,
   ).map((row) => ({ ...row, updatedAt: nowIso(), updatedBy: actor || "system" }));
 
   record.rows = normalizedRows;
@@ -976,6 +1182,7 @@ export async function updateMatchInfo(eventId, patch, actor) {
   const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
+  const eventPhases = getEventPhasesForTournament(state, record.tournamentId);
 
   const current = normalizeMatchInfo(record.metadata.match);
   const nextMatch = {
@@ -990,6 +1197,11 @@ export async function updateMatchInfo(eventId, patch, actor) {
     match: normalizeMatchInfo(nextMatch),
     updatedAt: nowIso(),
   };
+  record.rows = rebuildTimeline(record.rows, eventPhases, record.metadata.match?.kickoffTime ?? null).map((row) => ({
+    ...row,
+    updatedAt: nowIso(),
+    updatedBy: actor || "system",
+  }));
   record.name = sanitizeText(record.name) || record.metadata.match.matchId || "Untitled Event";
   record.updatedAt = nowIso();
 
@@ -1011,6 +1223,7 @@ export async function createRow(eventId, payload, actor) {
   const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
+  const eventPhases = getEventPhasesForTournament(state, record.tournamentId);
 
   const row = normalizeRow(
     {
@@ -1021,10 +1234,11 @@ export async function createRow(eventId, payload, actor) {
     },
     actor || "user",
     record.rows.length,
+    eventPhases,
   );
 
   record.rows.push(row);
-  record.rows = rebuildTimeline(record.rows).map((item) => ({
+  record.rows = rebuildTimeline(record.rows, eventPhases, record.metadata?.match?.kickoffTime ?? null).map((item) => ({
     ...item,
     updatedAt: nowIso(),
     updatedBy: actor || "user",
@@ -1046,6 +1260,7 @@ export async function updateRow(eventId, rowId, payload, actor) {
   const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
+  const eventPhases = getEventPhasesForTournament(state, record.tournamentId);
 
   const index = record.rows.findIndex((row) => row.id === rowId);
   if (index === -1) return null;
@@ -1081,7 +1296,7 @@ export async function updateRow(eventId, rowId, payload, actor) {
     updatedBy: actor || "user",
   };
 
-  record.rows = rebuildTimeline(record.rows).map((row) =>
+  record.rows = rebuildTimeline(record.rows, eventPhases, record.metadata?.match?.kickoffTime ?? null).map((row) =>
     row.id === rowId ? { ...row, updatedAt: nowIso(), updatedBy: actor || "user" } : row,
   );
   record.updatedAt = nowIso();
@@ -1102,12 +1317,13 @@ export async function deleteRow(eventId, rowId, actor) {
   const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
+  const eventPhases = getEventPhasesForTournament(state, record.tournamentId);
 
   const index = record.rows.findIndex((row) => row.id === rowId);
   if (index === -1) return null;
 
   const [removed] = record.rows.splice(index, 1);
-  record.rows = rebuildTimeline(record.rows).map((row) => ({
+  record.rows = rebuildTimeline(record.rows, eventPhases, record.metadata?.match?.kickoffTime ?? null).map((row) => ({
     ...row,
     updatedAt: nowIso(),
     updatedBy: actor || "user",
@@ -1129,6 +1345,7 @@ export async function reorderRows(eventId, orderedIds, actor) {
   const state = await readState();
   const record = findEventRecord(state, eventId);
   if (!record) return null;
+  const eventPhases = getEventPhasesForTournament(state, record.tournamentId);
 
   const map = new Map(record.rows.map((row) => [row.id, row]));
   const reordered = orderedIds
@@ -1136,7 +1353,7 @@ export async function reorderRows(eventId, orderedIds, actor) {
     .filter(Boolean)
     .concat(record.rows.filter((row) => !orderedIds.includes(row.id)));
 
-  record.rows = rebuildTimeline(reordered).map((row) => ({
+  record.rows = rebuildTimeline(reordered, eventPhases, record.metadata?.match?.kickoffTime ?? null).map((row) => ({
     ...row,
     updatedAt: nowIso(),
     updatedBy: actor || "user",

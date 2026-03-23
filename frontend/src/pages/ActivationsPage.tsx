@@ -463,6 +463,17 @@ export function ActivationsPage({
     resetWizard();
   }
 
+  useEffect(() => {
+    if (!wizardOpen || confirmCloseOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      requestCloseWizard();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [wizardOpen, confirmCloseOpen, busy, hasUnsavedChanges, tagInput]);
+
   function renderActivationRow(item: Activation, rowKey: string) {
     return (
       <tr key={rowKey}>

@@ -11,7 +11,7 @@ import {
   emptyDraft,
 } from "../components/EventFormModal";
 import { HardConfirmModal } from "../components/HardConfirmModal";
-import { api, hasPrivilege } from "../lib/api";
+import { api, hasPrivilege, PHASES } from "../lib/api";
 import type { Activation, CueEvent, CueSheetSnapshot, Tournament, UserAccount, Venue } from "../lib/api";
 import { matchInfoToDraft } from "../lib/api";
 import { Button } from "../components/ui/Button";
@@ -216,6 +216,7 @@ export function App({
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const [activationOptions, setActivationOptions] = useState<Activation[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
+  const [phaseMinuteAdjustments, setPhaseMinuteAdjustments] = useState<Record<string, number>>({});
   const versionMenuRef = useRef<HTMLDivElement | null>(null);
   const tableMenuRef = useRef<HTMLDivElement | null>(null);
   const [visibleColumns, setVisibleColumns] = useState<Record<CueColumnKey, boolean>>({
@@ -316,13 +317,46 @@ export function App({
 
   useEffect(() => {
     setSelectedTimelineEventId(null);
+    setPhaseMinuteAdjustments({});
   }, [eventId]);
+
+  useEffect(() => {
+    function onShortcut(event: KeyboardEvent) {
+      if (!event.altKey || event.key.toLowerCase() !== "n") return;
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase() || "";
+      const isTypingContext =
+        target?.isContentEditable ||
+        tagName === "input" ||
+        tagName === "textarea" ||
+        tagName === "select";
+      if (isTypingContext) return;
+      if (editor.open) return;
+      if (!hasPrivilege(currentUser, "cuesheet", "edit")) return;
+      event.preventDefault();
+      openCreateModal();
+    }
+
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, [currentUser, editor.open]);
 
   useEffect(() => {
     if (selectedTimelineEventId) return;
     const firstEvent = snapshot?.events?.[0];
     if (firstEvent) setSelectedTimelineEventId(firstEvent.id);
   }, [snapshot, selectedTimelineEventId]);
+
+  useEffect(() => {
+    if (!versionLogModalOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setVersionLogModalOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [versionLogModalOpen]);
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -357,7 +391,10 @@ export function App({
   }
 
   function openCreateModal() {
-    setDraft(emptyDraft);
+    setDraft((current) => ({
+      ...emptyDraft,
+      phase: phaseOptions[0]?.key || current.phase || emptyDraft.phase,
+    }));
     setEditor({ open: true, mode: "create", eventId: null });
   }
 
@@ -405,11 +442,70 @@ export function App({
   const selectedVenue =
     venues.find((venue) => venue.id === matchInfo.venueId) ??
     venues.find((venue) => venue.name === matchInfo.venue);
+  const selectedTournament =
+    tournaments.find((item) => item.id === selectedTournamentId) ?? tournaments[0] ?? null;
+  const phaseOptions = selectedTournament?.eventPhases?.length
+    ? selectedTournament.eventPhases
+    : PHASES;
   const screenOptions = (selectedVenue?.tech?.screens ?? []).map((screen, index) => ({
     id: screen.id,
     label: `${screen.type.replaceAll("_", " ")} ${index + 1}`,
     type: screen.type,
   }));
+
+  function adjustPhaseMinutes(phaseKey: string, deltaMinutes: number) {
+    setPhaseMinuteAdjustments((prev) => ({
+      ...prev,
+      [phaseKey]: (prev[phaseKey] ?? 0) + deltaMinutes,
+    }));
+  }
+
+  async function insertBlankRowAfter(row: CueEvent) {
+    if (!hasPrivilege(currentUser, "cuesheet", "edit")) return;
+    const orderedBefore = [...(snapshot?.events ?? [])].sort((a, b) => a.rowOrder - b.rowOrder);
+    if (!orderedBefore.length) return;
+    const existingIds = new Set(orderedBefore.map((item) => item.id));
+
+    await run(async () => {
+      const createdSnapshot = await api.addRow(eventId, {
+        phase: row.phase,
+        category: "",
+        cue: "",
+        asset: "",
+        operator: "",
+        audio: "",
+        script: "",
+        activationId: "",
+        status: "pending",
+        notes: "",
+      });
+
+      const orderedWithNew = [...(createdSnapshot.events ?? [])].sort((a, b) => a.rowOrder - b.rowOrder);
+      const createdRow = orderedWithNew.find((item) => !existingIds.has(item.id));
+      if (!createdRow) {
+        setSnapshot(createdSnapshot);
+        return;
+      }
+
+      const nextIds = orderedWithNew.map((item) => item.id).filter((id) => id !== createdRow.id);
+      const anchorIndex = nextIds.findIndex((id) => id === row.id);
+      if (anchorIndex === -1) {
+        setSnapshot(createdSnapshot);
+        return;
+      }
+      nextIds.splice(anchorIndex + 1, 0, createdRow.id);
+      setSnapshot(await api.reorderRows(eventId, nextIds));
+    });
+  }
+
+  useEffect(() => {
+    if (!editor.open) return;
+    if (phaseOptions.some((phase) => phase.key === draft.phase)) return;
+    setDraft((prev) => ({
+      ...prev,
+      phase: phaseOptions[0]?.key || prev.phase,
+    }));
+  }, [draft.phase, editor.open, phaseOptions]);
 
   return (
     <div className="page-shell">
@@ -630,6 +726,11 @@ export function App({
             <div className="table-stack">
               <CueTable
                 events={snapshot?.events ?? []}
+                phaseOptions={phaseOptions}
+                phaseMinuteAdjustments={phaseMinuteAdjustments}
+                kickoffTime={matchInfo.kickoffTime}
+                onAdjustPhaseMinutes={adjustPhaseMinutes}
+                onInsertAfter={hasPrivilege(currentUser, "cuesheet", "edit") ? insertBlankRowAfter : undefined}
                 visibleColumns={columnOptions
                   .filter((option) => visibleColumns[option.key])
                   .map((option) => option.key)}
@@ -691,6 +792,7 @@ export function App({
         title={editor.mode === "create" ? "Insert Cue Record" : "Edit Cue Record"}
         draft={draft}
         activationOptions={activationOptions}
+        phaseOptions={phaseOptions}
         screenOptions={screenOptions}
         onChange={setDraft}
         onClose={() => setEditor({ open: false, mode: "create", eventId: null })}

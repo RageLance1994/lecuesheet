@@ -5,6 +5,7 @@ import { App } from "./pages/App";
 import { EventsPage } from "./pages/EventsPage";
 import { ActivationsPage } from "./pages/ActivationsPage";
 import { VenuesPage } from "./pages/VenuesPage";
+import { TeamsPage } from "./pages/TeamsPage";
 import { PersonnelPage } from "./pages/PersonnelPage";
 import { UsersPage } from "./pages/UsersPage";
 import { api, hasPrivilege, setApiUser, type Tournament, type UserAccount } from "./lib/api";
@@ -15,6 +16,8 @@ import {
 } from "./components/TournamentWizardModal";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import "./styles/globals.css";
+
+const LAST_TOURNAMENT_STORAGE_KEY = "lecuesheet:lastTournamentId";
 
 function normalizePathname(pathname: string) {
   if (!pathname || pathname === "/") return "/events";
@@ -74,9 +77,26 @@ function RouterShell() {
   useEffect(() => {
     if (!tournaments.length) return;
     const requested = new URLSearchParams(search).get("tournament") ?? "";
-    const resolved = tournaments.some((item) => item.id === requested) ? requested : tournaments[0].id;
+    const stored = (() => {
+      try {
+        return window.localStorage.getItem(LAST_TOURNAMENT_STORAGE_KEY) ?? "";
+      } catch {
+        return "";
+      }
+    })();
+    const fallbackId = tournaments[0].id;
+    const resolved = tournaments.some((item) => item.id === requested)
+      ? requested
+      : tournaments.some((item) => item.id === stored)
+        ? stored
+        : fallbackId;
     if (resolved !== selectedTournamentId) {
       setSelectedTournamentId(resolved);
+    }
+    try {
+      window.localStorage.setItem(LAST_TOURNAMENT_STORAGE_KEY, resolved);
+    } catch {
+      // Ignore storage failures (private mode / disabled storage).
     }
     if (resolved !== requested) {
       const params = new URLSearchParams(search);
@@ -108,6 +128,15 @@ function RouterShell() {
 
   function selectTournament(tournamentId: string) {
     setSelectedTournamentId(tournamentId);
+    try {
+      if (tournamentId) {
+        window.localStorage.setItem(LAST_TOURNAMENT_STORAGE_KEY, tournamentId);
+      } else {
+        window.localStorage.removeItem(LAST_TOURNAMENT_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage failures (private mode / disabled storage).
+    }
     const params = new URLSearchParams(search);
     if (tournamentId) {
       params.set("tournament", tournamentId);
@@ -140,6 +169,10 @@ function RouterShell() {
       format: tournament.format || "Single elimination",
       teamsCount: tournament.teamsCount === null || tournament.teamsCount === undefined ? "" : String(tournament.teamsCount),
       hostCountries: tournament.hostCountries ?? [],
+      eventPhases:
+        Array.isArray(tournament.eventPhases) && tournament.eventPhases.length > 0
+          ? tournament.eventPhases
+          : emptyTournamentDraft().eventPhases,
     });
     setTournamentWizardOpen(true);
   }
@@ -158,6 +191,15 @@ function RouterShell() {
         format: tournamentWizardDraft.format || null,
         teamsCount: tournamentWizardDraft.teamsCount.trim() ? Number(tournamentWizardDraft.teamsCount) : null,
         hostCountries: tournamentWizardDraft.hostCountries,
+        eventPhases: (tournamentWizardDraft.eventPhases ?? [])
+          .filter((phase) => phase.label.trim())
+          .map((phase, index) => ({
+            key: phase.key?.trim() || `PHASE_${index + 1}`,
+            label: phase.label.trim(),
+            offsetMinutes: Number.isFinite(Number(phase.offsetMinutes))
+              ? Math.round(Number(phase.offsetMinutes))
+              : 0,
+          })),
       };
 
       if (tournamentWizardMode === "edit" && editingTournamentId) {
@@ -199,6 +241,9 @@ function RouterShell() {
     if (pathname === "/venues") {
       return { type: "venues" as const };
     }
+    if (pathname === "/teams") {
+      return { type: "teams" as const };
+    }
     const cuesheetMatch = pathname.match(/^\/events\/([^/]+)$/);
     if (cuesheetMatch) {
       return { type: "cuesheet" as const, eventId: cuesheetMatch[1] };
@@ -212,6 +257,7 @@ function RouterShell() {
       events: hasPrivilege(user, "events", "view"),
       activations: hasPrivilege(user, "activations", "view"),
       venues: hasPrivilege(user, "venues", "view"),
+      teams: hasPrivilege(user, "teams", "view"),
       personnel: hasPrivilege(user, "personnel", "view") && user?.role === "super_admin",
       users: user?.role === "super_admin",
     };
@@ -224,6 +270,8 @@ function RouterShell() {
         ? "/activations"
         : pageAccess.venues
           ? "/venues"
+          : pageAccess.teams
+            ? "/teams"
           : pageAccess.personnel
             ? "/personnel"
             : "/events";
@@ -231,6 +279,7 @@ function RouterShell() {
       (pathname.startsWith("/events") && !pageAccess.events) ||
       (pathname.startsWith("/activations") && !pageAccess.activations) ||
       (pathname.startsWith("/venues") && !pageAccess.venues) ||
+      (pathname.startsWith("/teams") && !pageAccess.teams) ||
       (pathname.startsWith("/personnel") && !pageAccess.personnel) ||
       (pathname.startsWith("/users") && !pageAccess.users);
     if (routeBlocked) {
@@ -339,6 +388,35 @@ function RouterShell() {
         pageAccess={pageAccess}
       />
     ) : null;
+  }
+
+  if (route.type === "teams") {
+    return (
+      <>
+        <TeamsPage
+          onNavigate={navigate}
+          tournaments={tournaments}
+          selectedTournamentId={selectedTournamentId}
+          onSelectTournament={selectTournament}
+          onCreateTournament={openTournamentCreate}
+          onEditTournament={openTournamentEdit}
+          onDeleteTournament={setDeleteTournamentTarget}
+          currentUser={currentUser}
+          pageAccess={pageAccess}
+        />
+        <TournamentWizardModal
+          open={tournamentWizardOpen}
+          mode={tournamentWizardMode}
+          draft={tournamentWizardDraft}
+          busy={busyTournament}
+          onChange={setTournamentWizardDraft}
+          onClose={() => setTournamentWizardOpen(false)}
+          onSubmit={() => {
+            void submitTournamentWizard();
+          }}
+        />
+      </>
+    );
   }
 
   if (route.type === "users") {

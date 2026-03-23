@@ -25,6 +25,10 @@ import {
   createActivation,
   updateActivation,
   deleteActivation,
+  listTeams,
+  createTeam,
+  updateTeam,
+  deleteTeam,
   replaceCuesheet,
   createRow,
   updateRow,
@@ -71,16 +75,7 @@ fs.mkdirSync(personnelDocsRoot, { recursive: true });
 app.use("/uploads", express.static(uploadsRoot));
 
 const rowSchema = z.object({
-  phase: z
-    .enum([
-      "GATES_OPEN",
-      "KICK_OFF",
-      "HT_HALF_TIME",
-      "SECOND_HALF_KICK_OFF",
-      "FULL_TIME",
-    ])
-    .optional()
-    .default("GATES_OPEN"),
+  phase: z.string().optional().default("GATES_OPEN"),
   category: z.string().optional().default(""),
   cue: z.string().optional().default(""),
   asset: z.string().optional().default(""),
@@ -193,6 +188,36 @@ const activationSchema = z
 
 const activationPatchSchema = activationSchema.partial();
 
+const teamPlayerSchema = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().min(1),
+    number: z.number().int().nonnegative().nullable().optional(),
+    position: optionalTextSchema,
+  })
+  .strict();
+
+const teamSchema = z
+  .object({
+    name: z.string().min(1),
+    tournamentId: z.string().optional(),
+    country: optionalTextSchema,
+    tricode: optionalTextSchema,
+    logoUrl: optionalTextSchema,
+    players: z.array(teamPlayerSchema).optional(),
+  })
+  .strict();
+
+const teamPatchSchema = teamSchema.partial();
+
+const eventPhaseSchema = z
+  .object({
+    key: z.string().min(1),
+    label: z.string().min(1),
+    offsetMinutes: z.number().int(),
+  })
+  .strict();
+
 const tournamentSchema = z
   .object({
     name: z.string().min(1),
@@ -205,6 +230,7 @@ const tournamentSchema = z
     format: optionalTextSchema,
     teamsCount: z.number().int().nonnegative().nullable().optional(),
     hostCountries: z.array(z.string()).optional(),
+    eventPhases: z.array(eventPhaseSchema).optional(),
   })
   .strict();
 
@@ -832,6 +858,41 @@ app.post("/api/venues", withPrivilege("venues", "create", async (req, res, user)
   const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
   const venue = await createVenue(parsed.data, actorFromRequest(req, user), tournamentId ?? parsed.data.tournamentId);
   return res.status(201).json(venue);
+}));
+
+app.get("/api/teams", withPrivilege("teams", "view", async (req, res) => {
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  res.json(await listTeams(tournamentId));
+}));
+
+app.post("/api/teams", withPrivilege("teams", "create", async (req, res, user) => {
+  const parsed = teamSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json(parsed.error.flatten());
+  }
+  const tournamentId = typeof req.query.tournamentId === "string" ? req.query.tournamentId : null;
+  const team = await createTeam(parsed.data, actorFromRequest(req, user), tournamentId ?? parsed.data.tournamentId);
+  return res.status(201).json(team);
+}));
+
+app.patch("/api/teams/:teamId", withPrivilege("teams", "edit", async (req, res, user) => {
+  const parsed = teamPatchSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json(parsed.error.flatten());
+  }
+  const updated = await updateTeam(req.params.teamId, parsed.data, actorFromRequest(req, user));
+  if (!updated) {
+    return res.status(404).json({ error: "Team not found" });
+  }
+  return res.json(updated);
+}));
+
+app.delete("/api/teams/:teamId", withPrivilege("teams", "delete", async (req, res) => {
+  const removed = await deleteTeam(req.params.teamId);
+  if (!removed) {
+    return res.status(404).json({ error: "Team not found" });
+  }
+  return res.json(removed);
 }));
 
 app.get("/api/activations", withPrivilege("activations", "view", async (req, res) => {

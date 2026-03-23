@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Tournament } from "../lib/api";
 
-type ActiveSection = "events" | "activations" | "venues" | "personnel" | "users";
+type ActiveSection = "events" | "activations" | "venues" | "teams" | "personnel" | "users";
 type PageAccess = {
   events: boolean;
   activations: boolean;
   venues: boolean;
+  teams?: boolean;
   personnel: boolean;
   users: boolean;
 };
@@ -218,6 +219,16 @@ export function AppSidebar({
           >
             <i className="fa-solid fa-location-dot" />
             <span>Venues</span>
+          </button>
+        ) : null}
+        {pageAccess.teams ? (
+          <button
+            className={`sidebar-nav__item ${active === "teams" ? "is-active" : ""}`}
+            type="button"
+            onClick={() => onNavigate("/teams")}
+          >
+            <i className="fa-solid fa-shield-halved" />
+            <span>Teams</span>
           </button>
         ) : null}
         {pageAccess.personnel ? (
