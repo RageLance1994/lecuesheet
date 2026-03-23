@@ -12,6 +12,21 @@ type HoveredMarker = {
   left: number;
 };
 
+function markerLeft(index: number, total: number) {
+  if (total <= 1) return 50;
+  return (index / (total - 1)) * 100;
+}
+
+function markerStyle(left: number) {
+  if (left <= 0) {
+    return { left: "0%", transform: "translate(0, -50%)" as const };
+  }
+  if (left >= 100) {
+    return { left: "100%", transform: "translate(-100%, -50%)" as const };
+  }
+  return { left: `${left}%`, transform: "translate(-50%, -50%)" as const };
+}
+
 function statusClass(status: string) {
   if (status === "live") return "is-live";
   if (status === "done") return "is-done";
@@ -29,6 +44,20 @@ export function CuesheetTimeline({ events, selectedEventId, onSelectEvent }: Pro
   const [collapsed, setCollapsed] = useState(false);
 
   if (!ordered.length) return null;
+
+  const separatorMarkers = ordered.reduce<Array<{ key: string; left: number; phase: string }>>(
+    (acc, event, index) => {
+      if (index === 0 || ordered[index - 1]?.phase !== event.phase) {
+        acc.push({
+          key: `${event.phase}-${index}`,
+          left: markerLeft(index, ordered.length),
+          phase: event.phase,
+        });
+      }
+      return acc;
+    },
+    [],
+  );
 
   const selectedIndex = Math.max(
     0,
@@ -55,15 +84,23 @@ export function CuesheetTimeline({ events, selectedEventId, onSelectEvent }: Pro
       <div className={`timeline-content ${collapsed ? "is-collapsed" : ""}`}>
         <div className="timeline-rail-wrap">
           <div className="timeline-rail" />
+          {separatorMarkers.map((marker) => (
+            <span
+              key={marker.key}
+              className="timeline-separator-marker"
+              style={markerStyle(marker.left)}
+              title={marker.phase.replaceAll("_", " ")}
+              aria-hidden
+            />
+          ))}
           {ordered.map((event, index) => {
-            const leftRaw = ordered.length <= 1 ? 50 : (index / (ordered.length - 1)) * 100;
-            const left = Math.min(99.4, Math.max(0.6, leftRaw));
+            const left = markerLeft(index, ordered.length);
             return (
               <button
                 key={event.id}
                 type="button"
                 className={`timeline-marker ${statusClass(event.status)} ${selectedEventId === event.id ? "is-selected" : ""}`}
-                style={{ left: `${left}%` }}
+                style={markerStyle(left)}
                 onMouseEnter={() => setHovered({ id: event.id, left })}
                 onMouseLeave={() => setHovered((current) => (current?.id === event.id ? null : current))}
                 onClick={() => onSelectEvent(event.id)}

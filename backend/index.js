@@ -34,6 +34,7 @@ import {
   updateRow,
   deleteRow,
   reorderRows,
+  restoreRows,
   updateMatchInfo,
   getVersions,
   ensurePlannerEvent,
@@ -94,6 +95,9 @@ const rowSchema = z.object({
     .optional(),
   status: z.string().optional().default("pending"),
   notes: z.string().optional().default(""),
+  groupId: z.string().optional().nullable(),
+  groupName: z.string().optional().nullable(),
+  groupColor: z.string().optional().nullable(),
 });
 
 const optionalTextSchema = z.union([z.string(), z.null()]).optional();
@@ -1146,6 +1150,20 @@ app.post("/api/events/:eventId/rows/reorder", withPrivilege("cuesheet", "reorder
   }
 
   const next = await reorderRows(found.eventId, orderedIds, actorFromRequest(req, user));
+  await broadcastSnapshot(found.eventId);
+  return res.json(next);
+}));
+
+app.post("/api/events/:eventId/rows/restore", withPrivilege("cuesheet", "edit", async (req, res, user) => {
+  const found = await ensureEventOr404(req, res);
+  if (!found) return;
+
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+  if (!rows) {
+    return res.status(400).json({ error: "rows array required" });
+  }
+
+  const next = await restoreRows(found.eventId, rows, actorFromRequest(req, user));
   await broadcastSnapshot(found.eventId);
   return res.json(next);
 }));

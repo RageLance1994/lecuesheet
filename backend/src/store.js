@@ -396,6 +396,9 @@ function normalizeRow(event, actor, rowOrder, eventPhases = DEFAULT_EVENT_PHASES
     audio: sanitizeText(event.audio),
     script: sanitizeText(event.script),
     activationId: sanitizeOptionalText(event.activationId),
+    groupId: sanitizeOptionalText(event.groupId),
+    groupName: sanitizeOptionalText(event.groupName),
+    groupColor: sanitizeOptionalText(event.groupColor),
     screenTargets: Array.isArray(event.screenTargets)
       ? event.screenTargets.map((item) => normalizeScreenTarget(item))
       : [],
@@ -1275,6 +1278,9 @@ export async function updateRow(eventId, rowId, payload, actor) {
     "audio",
     "script",
     "activationId",
+    "groupId",
+    "groupName",
+    "groupColor",
     "status",
     "notes",
   ];
@@ -1362,6 +1368,35 @@ export async function reorderRows(eventId, orderedIds, actor) {
 
   pushVersion(record, {
     action: "rows_reorder",
+    actor: actor || "user",
+    details: { total: record.rows.length },
+  });
+
+  await writeState(state);
+  return snapshotFromRecord(record);
+}
+
+export async function restoreRows(eventId, rows, actor) {
+  const state = await readState();
+  const record = findEventRecord(state, eventId);
+  if (!record) return null;
+  const eventPhases = getEventPhasesForTournament(state, record.tournamentId);
+
+  const normalizedRows = rebuildTimeline(
+    (rows ?? []).map((row, index) => normalizeRow(row, actor, index, eventPhases)),
+    eventPhases,
+    record.metadata?.match?.kickoffTime ?? null,
+  ).map((row) => ({
+    ...row,
+    updatedAt: nowIso(),
+    updatedBy: actor || "user",
+  }));
+
+  record.rows = normalizedRows;
+  record.updatedAt = nowIso();
+
+  pushVersion(record, {
+    action: "rows_restore",
     actor: actor || "user",
     details: { total: record.rows.length },
   });

@@ -1070,6 +1070,30 @@ h3 {
   box-shadow: inset 0 0 0 1px rgba(106, 168, 255, 0.56);
 }
 
+.cue-table .ui-table__row.row-selected {
+  background:
+    linear-gradient(0deg, rgba(106, 168, 255, 0.14), rgba(106, 168, 255, 0.14)),
+    rgba(18, 27, 42, 0.84);
+  box-shadow: inset 0 0 0 1px rgba(106, 168, 255, 0.34);
+}
+
+.cue-table .ui-table__row[style*="--row-group-color"] {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--row-group-color) 24%, transparent) 0%,
+      color-mix(in srgb, var(--row-group-color) 10%, transparent) 35%,
+      transparent 100%
+    ),
+    rgba(17, 24, 36, 0.78);
+}
+
+.cue-table .ui-table__row[style*="--row-group-color"].row-selected {
+  box-shadow:
+    inset 0 0 0 1px rgba(106, 168, 255, 0.48),
+    inset 4px 0 0 color-mix(in srgb, var(--row-group-color) 72%, white 8%);
+}
+
 .cue-row-expanded .ui-table__td {
   grid-column: 1 / -1;
   padding-top: 0.3rem;
@@ -1116,24 +1140,54 @@ h3 {
 .cue-insert-row .ui-table__td {
   grid-column: 1 / -1;
   padding: 0;
+  height: 0;
+  line-height: 0;
   border-bottom: 0;
+  background: transparent;
+  position: relative;
+  overflow: visible;
+}
+
+.cue-table .ui-table__row.cue-insert-row {
+  grid-template-columns: 1fr !important;
+}
+
+.cue-table .ui-table__row.cue-insert-row:hover {
   background: transparent;
 }
 
 .cue-insert-row__button {
   width: 100%;
-  height: 12px;
+  height: 0;
   border: 0;
   background: transparent;
   color: rgba(170, 195, 228, 0.65);
-  display: grid;
-  place-items: center;
+  display: block;
   cursor: pointer;
   padding: 0;
   border-top: 1px solid rgba(106, 168, 255, 0.16);
-  transition: height 140ms ease, color 140ms ease, border-color 140ms ease;
+  transition: color 140ms ease, border-color 140ms ease;
   position: relative;
   overflow: visible;
+}
+
+.cue-insert-row__dot {
+  position: absolute;
+  left: 50%;
+  top: 1px;
+  transform: translate(-50%, -50%) scale(0.72);
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(106, 168, 255, 0.35);
+  background: rgba(106, 168, 255, 0.12);
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition:
+    opacity 140ms ease,
+    transform 180ms cubic-bezier(0.22, 1.18, 0.36, 1);
+  pointer-events: none;
 }
 
 .cue-insert-row__button i {
@@ -1145,24 +1199,17 @@ h3 {
   transition: opacity 140ms ease, transform 180ms cubic-bezier(0.22, 1.18, 0.36, 1);
 }
 
-.cue-insert-row__button::before {
+.cue-insert-row__button::after {
   content: "";
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 16px;
-  height: 16px;
-  border-radius: 999px;
-  border: 1px solid rgba(106, 168, 255, 0.35);
-  background: rgba(106, 168, 255, 0.12);
-  opacity: 0;
-  transform: translate(-50%, -50%) scale(0.72);
-  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.22, 1.18, 0.36, 1);
+  top: -7px;
+  left: 0;
+  right: 0;
+  height: 14px;
 }
 
 .cue-insert-row__button:hover,
 .cue-insert-row__button:focus-visible {
-  height: 20px;
   color: #d6e9ff;
   border-top-color: rgba(106, 168, 255, 0.42);
 }
@@ -1173,8 +1220,8 @@ h3 {
   transform: scale(1);
 }
 
-.cue-insert-row__button:hover::before,
-.cue-insert-row__button:focus-visible::before {
+.cue-insert-row__button:hover .cue-insert-row__dot,
+.cue-insert-row__button:focus-visible .cue-insert-row__dot {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
 }
@@ -1184,8 +1231,9 @@ h3 {
 }
 
 .phase-separator {
-  position: relative;
-  z-index: 2;
+  position: sticky;
+  top: 0;
+  z-index: 6;
 }
 
 .phase-separator .ui-table__td {
@@ -1313,6 +1361,22 @@ h3 {
   text-overflow: ellipsis;
 }
 
+.cue-group-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(106, 168, 255, 0.4);
+  border-radius: 999px;
+  padding: 0.08rem 0.42rem;
+  margin-right: 0.34rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #98c5ff;
+  background: rgba(106, 168, 255, 0.08);
+  vertical-align: middle;
+}
+
 .metro-track {
   position: absolute;
   left: 12px;
@@ -1376,6 +1440,44 @@ h3 {
 .icon-actions {
   display: flex;
   gap: 0.35rem;
+}
+
+.cue-context-menu {
+  position: fixed;
+  min-width: 176px;
+  border: 1px solid rgba(106, 168, 255, 0.28);
+  border-radius: 10px;
+  background: #0f1624;
+  padding: 0.28rem;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.45);
+  z-index: 80;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.cue-context-menu button {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #deebff;
+  padding: 0.38rem 0.46rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cue-context-menu button:hover:not(:disabled) {
+  border-color: rgba(106, 168, 255, 0.26);
+  background: rgba(106, 168, 255, 0.1);
+}
+
+.cue-context-menu button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .timeline-card {
@@ -1455,13 +1557,26 @@ h3 {
 .timeline-marker {
   position: absolute;
   top: 50%;
-  transform: translate(-50%, -50%);
   width: 10px;
   height: 10px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.35);
   background: #8ea5c2;
   cursor: pointer;
+  z-index: 3;
+}
+
+.timeline-separator-marker {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 14px;
+  border-radius: 999px;
+  background: #9df7dc;
+  border: 1px solid rgba(157, 247, 220, 0.65);
+  box-shadow: 0 0 0 1px rgba(7, 23, 36, 0.45);
+  pointer-events: none;
+  z-index: 2;
 }
 
 .timeline-marker.is-selected {

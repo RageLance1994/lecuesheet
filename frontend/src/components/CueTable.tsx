@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { PHASES } from "../lib/api";
 import type { CueEvent, EventPhase } from "../lib/api";
 import { Badge } from "./ui/Badge";
@@ -54,10 +54,12 @@ type Props = {
   phaseMinuteAdjustments?: Readonly<Record<string, number>>;
   onPhaseMinuteAdjustmentsChange?: (next: Record<string, number>) => void;
   onAdjustPhaseMinutes?: (phaseKey: string, deltaMinutes: number) => void;
+  onGroupRows?: (rowIds: string[], group: { name: string; color: string }) => void;
+  onDeleteRows?: (rowIds: string[]) => void;
   onInsertAfter?: (event: CueEvent) => void;
   onEdit: (event: CueEvent) => void;
   onDelete: (event: CueEvent) => void;
-  onReorder: (draggedId: string, targetId: string) => void;
+  onReorderRows?: (orderedIds: string[]) => void;
   scrollToEventId?: string | null;
   visibleColumns: CueColumnKey[];
 };
@@ -115,10 +117,12 @@ export function CueTable({
   phaseMinuteAdjustments,
   onPhaseMinuteAdjustmentsChange,
   onAdjustPhaseMinutes,
+  onGroupRows,
+  onDeleteRows,
   onInsertAfter,
   onEdit,
   onDelete,
-  onReorder,
+  onReorderRows,
   scrollToEventId = null,
   visibleColumns,
 }: Props) {
@@ -128,6 +132,12 @@ export function CueTable({
   const [flashEventId, setFlashEventId] = useState<string | null>(null);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rowIds: string[] } | null>(null);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [groupColor, setGroupColor] = useState("#6aa8ff");
   const [localPhaseMinuteAdjustments, setLocalPhaseMinuteAdjustments] = useState<
     Record<string, number>
   >({});
@@ -137,6 +147,41 @@ export function CueTable({
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const validIds = new Set(events.map((event) => event.id));
+    setSelectedRowIds((current) => current.filter((id) => validIds.has(id)));
+    setSelectionAnchorId((current) => (current && validIds.has(current) ? current : null));
+  }, [events]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    function onClick() {
+      setContextMenu(null);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setContextMenu(null);
+      setGroupModalOpen(false);
+    }
+    window.addEventListener("mousedown", onClick);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onClick);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!groupModalOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setGroupModalOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [groupModalOpen]);
 
   const ordered = useMemo(
     () => [...events].sort((a, b) => a.rowOrder - b.rowOrder),
@@ -302,6 +347,69 @@ export function CueTable({
     setLocalPhaseMinuteAdjustments(nextAdjustments);
   }
 
+  function selectSingleRow(rowId: string) {
+    setSelectedRowIds([rowId]);
+    setSelectionAnchorId(rowId);
+  }
+
+  function handleRowSelectionClick(event: MouseEvent, rowId: string) {
+    if (event.button !== 0) return;
+    if (event.shiftKey) {
+      const anchorId = selectionAnchorId ?? rowId;
+      const indexById = new Map(ordered.map((item, index) => [item.id, index] as const));
+      const from = indexById.get(anchorId);
+      const to = indexById.get(rowId);
+      if (from === undefined || to === undefined) {
+        selectSingleRow(rowId);
+        return;
+      }
+      const start = Math.min(from, to);
+      const end = Math.max(from, to);
+      const rangeIds = ordered.slice(start, end + 1).map((item) => item.id);
+      setSelectedRowIds(rangeIds);
+      return;
+    }
+
+    if (event.ctrlKey || event.metaKey) {
+      setSelectedRowIds((current) => {
+        if (current.includes(rowId)) return current.filter((id) => id !== rowId);
+        return [...current, rowId];
+      });
+      setSelectionAnchorId(rowId);
+      return;
+    }
+
+    selectSingleRow(rowId);
+  }
+
+  function handleRowContextMenu(event: MouseEvent, rowId: string) {
+    event.preventDefault();
+    const rowIds = selectedRowIds.includes(rowId) ? selectedRowIds : [rowId];
+    setSelectedRowIds(rowIds);
+    setSelectionAnchorId(rowId);
+    setContextMenu({ x: event.clientX, y: event.clientY, rowIds });
+  }
+
+  function handleGroupSelectedRows() {
+    const rowIds = contextMenu?.rowIds ?? selectedRowIds;
+    if (!rowIds.length || !onGroupRows) return;
+    const selectedRows = ordered.filter((row) => rowIds.includes(row.id));
+    const sameGroup = selectedRows.every(
+      (row) => row.groupName === selectedRows[0]?.groupName && row.groupColor === selectedRows[0]?.groupColor,
+    );
+    setGroupName(sameGroup ? selectedRows[0]?.groupName ?? "" : "");
+    setGroupColor((sameGroup ? selectedRows[0]?.groupColor : null) || "#6aa8ff");
+    setGroupModalOpen(true);
+    setContextMenu(null);
+  }
+
+  function submitGroupRows() {
+    const rowIds = selectedRowIds;
+    if (!rowIds.length || !onGroupRows) return;
+    onGroupRows(rowIds, { name: groupName.trim() || "Group", color: groupColor });
+    setGroupModalOpen(false);
+  }
+
   const rowStyle = { gridTemplateColumns: gridTemplate };
 
   return (
@@ -395,24 +503,50 @@ export function CueTable({
                       ? Math.max(kickoffSeconds - currentSeconds, 0)
                       : null;
                   const expanded = expandedRowId === event.id;
-                  const canInsertAfter = Boolean(onInsertAfter) && globalIndex < ordered.length - 1;
+                  const canInsertAfter = Boolean(onInsertAfter);
+                  const rowRuntimeStyle = event.groupColor
+                    ? {
+                        ...rowStyle,
+                        ["--row-group-color" as string]: event.groupColor,
+                      }
+                    : rowStyle;
 
                   return (
                     <Fragment key={event.id}>
                       <TableRow
                         draggable
                         data-event-id={event.id}
-                        style={rowStyle}
-                        className={`${overId === event.id ? "drag-over" : ""} ${overdue ? "row-overdue" : ""} ${flashEventId === event.id ? "row-focused" : ""}`}
-                        onDragStart={() => setDraggedId(event.id)}
+                        style={rowRuntimeStyle}
+                        className={`${overId === event.id ? "drag-over" : ""} ${overdue ? "row-overdue" : ""} ${flashEventId === event.id ? "row-focused" : ""} ${selectedRowIds.includes(event.id) ? "row-selected" : ""}`}
+                        onClick={(e) => handleRowSelectionClick(e, event.id)}
+                        onContextMenu={(e) => handleRowContextMenu(e, event.id)}
+                        onDragStart={() => {
+                          if (selectedRowIds.includes(event.id) && selectedRowIds.length > 1) {
+                            setDraggedId(selectedRowIds[0] ?? event.id);
+                            return;
+                          }
+                          selectSingleRow(event.id);
+                          setDraggedId(event.id);
+                        }}
                         onDragOver={(e) => {
                           e.preventDefault();
                           setOverId(event.id);
                         }}
                         onDrop={(e) => {
                           e.preventDefault();
-                          if (!draggedId || draggedId === event.id) return;
-                          onReorder(draggedId, event.id);
+                          if (!draggedId || draggedId === event.id || !onReorderRows) return;
+                          const draggedIds = selectedRowIds.includes(draggedId) && selectedRowIds.length > 1
+                            ? selectedRowIds
+                            : [draggedId];
+                          if (draggedIds.includes(event.id)) return;
+                          const draggedSet = new Set(draggedIds);
+                          const remaining = ordered.filter((rowItem) => !draggedSet.has(rowItem.id));
+                          const targetIndex = remaining.findIndex((rowItem) => rowItem.id === event.id);
+                          if (targetIndex === -1) return;
+                          const draggedRows = ordered.filter((rowItem) => draggedSet.has(rowItem.id));
+                          const nextOrderRows = [...remaining];
+                          nextOrderRows.splice(targetIndex, 0, ...draggedRows);
+                          onReorderRows(nextOrderRows.map((rowItem) => rowItem.id));
                           setDraggedId(null);
                           setOverId(null);
                         }}
@@ -484,6 +618,14 @@ export function CueTable({
                             case "cue":
                               return (
                                 <TableCell key={column.key} className="truncate-cell">
+                                  {event.groupName ? (
+                                    <span
+                                      className="cue-group-chip"
+                                      style={event.groupColor ? { borderColor: event.groupColor, color: event.groupColor } : undefined}
+                                    >
+                                      {event.groupName}
+                                    </span>
+                                  ) : null}
                                   {event.cue || "-"}
                                 </TableCell>
                               );
@@ -519,7 +661,10 @@ export function CueTable({
                                       variant="outline"
                                       size="icon"
                                       title="Edit"
-                                      onClick={() => onEdit(event)}
+                                      onClick={(clickEvent) => {
+                                        clickEvent.stopPropagation();
+                                        onEdit(event);
+                                      }}
                                     >
                                       <i className="fa-solid fa-pen-to-square" />
                                     </Button>
@@ -527,7 +672,10 @@ export function CueTable({
                                       variant="danger"
                                       size="icon"
                                       title="Delete"
-                                      onClick={() => onDelete(event)}
+                                      onClick={(clickEvent) => {
+                                        clickEvent.stopPropagation();
+                                        onDelete(event);
+                                      }}
                                     >
                                       <i className="fa-solid fa-trash" />
                                     </Button>
@@ -568,7 +716,9 @@ export function CueTable({
                               aria-label="Insert blank row below"
                               onClick={() => onInsertAfter?.(event)}
                             >
-                              <i className="fa-solid fa-plus" />
+                              <span className="cue-insert-row__dot">
+                                <i className="fa-solid fa-plus" />
+                              </span>
                             </button>
                           </TableCell>
                         </TableRow>
@@ -581,6 +731,55 @@ export function CueTable({
           })}
         </TableBody>
       </Table>
+      {contextMenu ? (
+        <div
+          className="cue-context-menu"
+          style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={handleGroupSelectedRows} disabled={!onGroupRows}>
+            <i className="fa-solid fa-layer-group" />
+            <span>Group Selected</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!onDeleteRows) return;
+              onDeleteRows(contextMenu.rowIds);
+              setContextMenu(null);
+            }}
+            disabled={!onDeleteRows}
+          >
+            <i className="fa-solid fa-trash" />
+            <span>Delete Selected</span>
+          </button>
+        </div>
+      ) : null}
+      {groupModalOpen ? (
+        <div className="modal-overlay" onMouseDown={() => setGroupModalOpen(false)}>
+          <div className="modal modal-confirm" onMouseDown={(event) => event.stopPropagation()}>
+            <h3>Group Rows</h3>
+            <div className="modal-grid" style={{ marginTop: "0.65rem" }}>
+              <label className="field">
+                <span>Group Name</span>
+                <input value={groupName} onChange={(event) => setGroupName(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>Group Color</span>
+                <input type="color" value={groupColor} onChange={(event) => setGroupColor(event.target.value)} />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <Button variant="outline" onClick={() => setGroupModalOpen(false)}>
+                <span>Cancel</span>
+              </Button>
+              <Button onClick={submitGroupRows} disabled={!selectedRowIds.length}>
+                <span>Apply Group</span>
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

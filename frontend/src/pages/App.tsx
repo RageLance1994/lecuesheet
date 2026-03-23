@@ -22,6 +22,9 @@ import {
   CardTitle,
 } from "../components/ui/Card";
 
+const MATCH_INFO_COLLAPSE_STORAGE_KEY = "lecuesheet:matchInfoOpen";
+const LAST_CUESHEET_EVENT_STORAGE_KEY = "lecuesheet:lastCuesheetEventId";
+
 type ConfirmState = {
   open: boolean;
   title: string;
@@ -177,16 +180,6 @@ function MatchMiniLogo({
   );
 }
 
-function moveByIds(events: CueEvent[], draggedId: string, targetId: string) {
-  const next = [...events];
-  const from = next.findIndex((event) => event.id === draggedId);
-  const to = next.findIndex((event) => event.id === targetId);
-  if (from === -1 || to === -1 || from === to) return next;
-  const [item] = next.splice(from, 1);
-  next.splice(to, 0, item);
-  return next;
-}
-
 export function App({
   eventId,
   onNavigate,
@@ -209,7 +202,16 @@ export function App({
     eventId: null,
   });
   const [confirm, setConfirm] = useState<ConfirmState>(initialConfirm);
-  const [matchInfoOpen, setMatchInfoOpen] = useState(true);
+  const [matchInfoOpen, setMatchInfoOpen] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(MATCH_INFO_COLLAPSE_STORAGE_KEY);
+      if (stored === "0") return false;
+      if (stored === "1") return true;
+    } catch {
+      // Ignore storage failures.
+    }
+    return true;
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const [versionLogModalOpen, setVersionLogModalOpen] = useState(false);
   const [selectedTimelineEventId, setSelectedTimelineEventId] = useState<string | null>(null);
@@ -217,6 +219,7 @@ export function App({
   const [activationOptions, setActivationOptions] = useState<Activation[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
   const [phaseMinuteAdjustments, setPhaseMinuteAdjustments] = useState<Record<string, number>>({});
+  const [undoStack, setUndoStack] = useState<CueEvent[][]>([]);
   const versionMenuRef = useRef<HTMLDivElement | null>(null);
   const tableMenuRef = useRef<HTMLDivElement | null>(null);
   const [visibleColumns, setVisibleColumns] = useState<Record<CueColumnKey, boolean>>({
@@ -318,10 +321,44 @@ export function App({
   useEffect(() => {
     setSelectedTimelineEventId(null);
     setPhaseMinuteAdjustments({});
+    setUndoStack([]);
   }, [eventId]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(LAST_CUESHEET_EVENT_STORAGE_KEY, eventId);
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [eventId]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MATCH_INFO_COLLAPSE_STORAGE_KEY, matchInfoOpen ? "1" : "0");
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [matchInfoOpen]);
+
+  useEffect(() => {
     function onShortcut(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+        const target = event.target as HTMLElement | null;
+        const tagName = target?.tagName?.toLowerCase() || "";
+        const isTypingContext =
+          target?.isContentEditable ||
+          tagName === "input" ||
+          tagName === "textarea" ||
+          tagName === "select";
+        if (isTypingContext || busy || !undoStack.length) return;
+        event.preventDefault();
+        const [previousRows, ...rest] = undoStack;
+        void run(async () => {
+          setSnapshot(await api.restoreRows(eventId, previousRows));
+          setUndoStack(rest);
+        });
+        return;
+      }
       if (!event.altKey || event.key.toLowerCase() !== "n") return;
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName?.toLowerCase() || "";
@@ -339,7 +376,7 @@ export function App({
 
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [currentUser, editor.open]);
+  }, [busy, currentUser, editor.open, eventId, undoStack]);
 
   useEffect(() => {
     if (selectedTimelineEventId) return;
@@ -368,6 +405,18 @@ export function App({
     } finally {
       setBusy(false);
     }
+  }
+
+  function cloneRows(rows: CueEvent[]) {
+    return rows.map((row) => ({
+      ...row,
+      screenTargets: row.screenTargets ? row.screenTargets.map((item) => ({ ...item })) : [],
+    }));
+  }
+
+  function pushUndoRows(rows: CueEvent[]) {
+    const cloned = cloneRows(rows);
+    setUndoStack((prev) => [cloned, ...prev].slice(0, 40));
   }
 
   function requestConfirm(
@@ -410,8 +459,10 @@ export function App({
         "Confirm adding this record to the cuesheet.",
         "Create",
         async () => {
+          const previousRows = cloneRows(snapshot?.events ?? []);
           await run(async () => {
             setSnapshot(await api.addRow(eventId, draft));
+            pushUndoRows(previousRows);
             setEditor({ open: false, mode: "create", eventId: null });
             setDraft(emptyDraft);
           });
@@ -428,8 +479,10 @@ export function App({
       "Confirm record update.",
       "Save",
       async () => {
+        const previousRows = cloneRows(snapshot?.events ?? []);
         await run(async () => {
           setSnapshot(await api.updateRow(eventId, rowId, draft));
+          pushUndoRows(previousRows);
           setEditor({ open: false, mode: "create", eventId: null });
           setDraft(emptyDraft);
         });
@@ -464,6 +517,7 @@ export function App({
     if (!hasPrivilege(currentUser, "cuesheet", "edit")) return;
     const orderedBefore = [...(snapshot?.events ?? [])].sort((a, b) => a.rowOrder - b.rowOrder);
     if (!orderedBefore.length) return;
+    const previousRows = cloneRows(snapshot?.events ?? []);
     const existingIds = new Set(orderedBefore.map((item) => item.id));
 
     await run(async () => {
@@ -495,7 +549,55 @@ export function App({
       }
       nextIds.splice(anchorIndex + 1, 0, createdRow.id);
       setSnapshot(await api.reorderRows(eventId, nextIds));
+      pushUndoRows(previousRows);
     });
+  }
+
+  async function groupRows(rowIds: string[], group: { name: string; color: string }) {
+    if (!hasPrivilege(currentUser, "cuesheet", "edit")) return;
+    const currentRows = snapshot?.events ?? [];
+    if (!currentRows.length || !rowIds.length) return;
+    const selectedIds = new Set(rowIds);
+    const groupId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `group-${Date.now()}`;
+    const nextRows = currentRows.map((row) =>
+      selectedIds.has(row.id)
+        ? {
+            ...row,
+            groupId,
+            groupName: group.name.trim() || "Group",
+            groupColor: group.color || "#6aa8ff",
+          }
+        : row,
+    );
+    const previousRows = cloneRows(currentRows);
+    await run(async () => {
+      setSnapshot(await api.restoreRows(eventId, nextRows));
+      pushUndoRows(previousRows);
+    });
+  }
+
+  function requestDeleteRows(rowIds: string[]) {
+    if (!hasPrivilege(currentUser, "cuesheet", "edit")) return;
+    const currentRows = snapshot?.events ?? [];
+    if (!currentRows.length || !rowIds.length) return;
+    requestConfirm(
+      "Delete Selected Rows",
+      `Permanently delete ${rowIds.length} selected rows?`,
+      "Delete",
+      async () => {
+        const selectedIds = new Set(rowIds);
+        const nextRows = currentRows.filter((row) => !selectedIds.has(row.id));
+        const previousRows = cloneRows(currentRows);
+        await run(async () => {
+          setSnapshot(await api.restoreRows(eventId, nextRows));
+          pushUndoRows(previousRows);
+        });
+        setConfirm(initialConfirm);
+      },
+    );
   }
 
   useEffect(() => {
@@ -730,6 +832,10 @@ export function App({
                 phaseMinuteAdjustments={phaseMinuteAdjustments}
                 kickoffTime={matchInfo.kickoffTime}
                 onAdjustPhaseMinutes={adjustPhaseMinutes}
+                onGroupRows={(rowIds, group) => {
+                  void groupRows(rowIds, group);
+                }}
+                onDeleteRows={requestDeleteRows}
                 onInsertAfter={hasPrivilege(currentUser, "cuesheet", "edit") ? insertBlankRowAfter : undefined}
                 visibleColumns={columnOptions
                   .filter((option) => visibleColumns[option.key])
@@ -746,23 +852,23 @@ export function App({
                     `Permanently delete "${event.cue || event.id}"?`,
                     "Delete",
                     async () => {
+                      const previousRows = cloneRows(snapshot?.events ?? []);
                       await run(async () => setSnapshot(await api.deleteRow(eventId, event.id)));
+                      pushUndoRows(previousRows);
                       setConfirm(initialConfirm);
                     },
                   ) : undefined
                 }
-                onReorder={(draggedId, targetId) => {
+                onReorderRows={(orderedIds) => {
                   if (!hasPrivilege(currentUser, "cuesheet", "reorder")) return;
-                  const ordered = [...(snapshot?.events ?? [])].sort((a, b) => a.rowOrder - b.rowOrder);
-                  const nextOrdered = moveByIds(ordered, draggedId, targetId);
+                  const previousRows = cloneRows(snapshot?.events ?? []);
                   requestConfirm(
                     "Reorder CueSheet",
                     "Confirm the new order? The system will recalculate timecodes.",
                     "Apply",
                     async () => {
-                      await run(async () =>
-                        setSnapshot(await api.reorderRows(eventId, nextOrdered.map((event) => event.id))),
-                      );
+                      await run(async () => setSnapshot(await api.reorderRows(eventId, orderedIds)));
+                      pushUndoRows(previousRows);
                       setConfirm(initialConfirm);
                     },
                   );

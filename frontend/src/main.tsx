@@ -18,14 +18,45 @@ import "@fortawesome/fontawesome-free/css/all.min.css";
 import "./styles/globals.css";
 
 const LAST_TOURNAMENT_STORAGE_KEY = "lecuesheet:lastTournamentId";
+const LAST_CUESHEET_EVENT_STORAGE_KEY = "lecuesheet:lastCuesheetEventId";
 
 function normalizePathname(pathname: string) {
   if (!pathname || pathname === "/") return "/events";
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    return pathname.slice(0, -1);
+  }
   return pathname;
 }
 
+function parseCuesheetEventId(pathname: string) {
+  const match = pathname.match(/^\/events\/([^/]+)$/);
+  return match ? match[1] : null;
+}
+
+function isReloadNavigation() {
+  try {
+    const entries = window.performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+    return entries[0]?.type === "reload";
+  } catch {
+    return false;
+  }
+}
+
+function resolveInitialPathname() {
+  const current = normalizePathname(window.location.pathname);
+  if (current !== "/events") return current;
+  if (!isReloadNavigation()) return current;
+  try {
+    const lastEventId = window.localStorage.getItem(LAST_CUESHEET_EVENT_STORAGE_KEY)?.trim() ?? "";
+    if (!lastEventId) return current;
+    return `/events/${encodeURIComponent(lastEventId)}`;
+  } catch {
+    return current;
+  }
+}
+
 function RouterShell() {
-  const [pathname, setPathname] = useState(() => normalizePathname(window.location.pathname));
+  const [pathname, setPathname] = useState(resolveInitialPathname);
   const [search, setSearch] = useState(() => window.location.search);
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
@@ -40,6 +71,10 @@ function RouterShell() {
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
 
   useEffect(() => {
+    const currentPath = normalizePathname(window.location.pathname);
+    if (pathname !== currentPath) {
+      window.history.replaceState({}, "", `${pathname}${window.location.search}`);
+    }
     if (window.location.pathname === "/") {
       window.history.replaceState({}, "", "/events");
       setPathname("/events");
@@ -52,6 +87,17 @@ function RouterShell() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  useEffect(() => {
+    const cuesheetEventId = parseCuesheetEventId(pathname);
+    try {
+      if (cuesheetEventId) {
+        window.localStorage.setItem(LAST_CUESHEET_EVENT_STORAGE_KEY, decodeURIComponent(cuesheetEventId));
+      }
+    } catch {
+      // Ignore storage failures (private mode / disabled storage).
+    }
+  }, [pathname]);
 
   useEffect(() => {
     let active = true;

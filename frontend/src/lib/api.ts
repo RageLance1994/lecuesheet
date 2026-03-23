@@ -115,6 +115,9 @@ export type CueEvent = {
   audio: string;
   script: string;
   activationId?: string | null;
+  groupId?: string | null;
+  groupName?: string | null;
+  groupColor?: string | null;
   screenTargets?: Array<{ screenId: string; screenLabel: string; value: string }>;
   status: string;
   notes: string;
@@ -659,6 +662,14 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ orderedIds }),
+      }),
+    ),
+  restoreRows: (eventId: string, rows: CueEvent[]) =>
+    parseResponse<CueSheetSnapshot>(
+      authedFetch(`/api/events/${eventId}/rows/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows }),
       }),
     ),
   saveMatchInfo: (eventId: string, payload: MatchInfoDraft) =>
