@@ -1108,7 +1108,7 @@ h3 {
   height: 0;
   border-top: 1px solid rgba(145, 190, 255, 0.76);
   box-shadow: 0 0 0 1px rgba(18, 35, 62, 0.18);
-  transform: translateY(-50%);
+  transform: none;
   z-index: 10000;
   pointer-events: none;
   opacity: 0;

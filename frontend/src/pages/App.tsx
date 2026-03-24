@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { AppSidebar } from "../components/AppSidebar";
 import { CueTable } from "../components/CueTable";
@@ -500,6 +500,16 @@ export function App({
   const phaseOptions = selectedTournament?.eventPhases?.length
     ? selectedTournament.eventPhases
     : PHASES;
+  const activationDurationsById = useMemo(
+    () =>
+      Object.fromEntries(
+        activationOptions.map((activation) => [
+          activation.id,
+          Math.max(0, Math.round((activation.durationMs ?? 0) / 1000)),
+        ]),
+      ) as Record<string, number>,
+    [activationOptions],
+  );
   const screenOptions = (selectedVenue?.tech?.screens ?? []).map((screen, index) => ({
     id: screen.id,
     label: `${screen.type.replaceAll("_", " ")} ${index + 1}`,
@@ -828,6 +838,7 @@ export function App({
             <div className="table-stack">
               <CueTable
                 events={snapshot?.events ?? []}
+                activationDurationsById={activationDurationsById}
                 phaseOptions={phaseOptions}
                 phaseMinuteAdjustments={phaseMinuteAdjustments}
                 kickoffTime={matchInfo.kickoffTime}

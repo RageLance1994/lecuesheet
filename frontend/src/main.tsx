@@ -33,26 +33,8 @@ function parseCuesheetEventId(pathname: string) {
   return match ? match[1] : null;
 }
 
-function isReloadNavigation() {
-  try {
-    const entries = window.performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
-    return entries[0]?.type === "reload";
-  } catch {
-    return false;
-  }
-}
-
 function resolveInitialPathname() {
-  const current = normalizePathname(window.location.pathname);
-  if (current !== "/events") return current;
-  if (!isReloadNavigation()) return current;
-  try {
-    const lastEventId = window.localStorage.getItem(LAST_CUESHEET_EVENT_STORAGE_KEY)?.trim() ?? "";
-    if (!lastEventId) return current;
-    return `/events/${encodeURIComponent(lastEventId)}`;
-  } catch {
-    return current;
-  }
+  return normalizePathname(window.location.pathname);
 }
 
 function RouterShell() {

@@ -49,6 +49,7 @@ const COLUMN_DEFS: ColumnDef[] = [
 
 type Props = {
   events: CueEvent[];
+  activationDurationsById?: Readonly<Record<string, number>>;
   phaseOptions?: readonly EventPhase[];
   kickoffTime?: string | null;
   phaseMinuteAdjustments?: Readonly<Record<string, number>>;
@@ -90,10 +91,16 @@ function formatClock(totalSeconds: number) {
   return `${hh}:${mm}:${ss}`;
 }
 
-function formatClockMinutes(date: Date) {
+function formatClockFromSeconds(totalSeconds: number | null) {
+  if (totalSeconds === null) return "--:--:--";
+  return formatClock(totalSeconds);
+}
+
+function formatClockWithSeconds(date: Date) {
   const hh = String(date.getHours()).padStart(2, "0");
   const mm = String(date.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
+  const ss = String(date.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
 }
 
 function formatRelativeMinutes(totalMinutes: number) {
@@ -104,6 +111,17 @@ function formatRelativeMinutes(totalMinutes: number) {
 function formatSignedMinutes(totalMinutes: number) {
   const sign = totalMinutes >= 0 ? "+" : "";
   return `${sign}${totalMinutes}m`;
+}
+
+function resolveRowSpanSeconds(
+  currentSeconds: number,
+  nextSeconds: number | null,
+  activationSeconds: number,
+) {
+  // Keep marker timing aligned with visible row duration (timecode -> next timecode).
+  if (nextSeconds !== null && nextSeconds > currentSeconds) return nextSeconds - currentSeconds;
+  if (activationSeconds > 0) return activationSeconds;
+  return 30;
 }
 
 function shortPhaseLabel(label: string) {
@@ -131,6 +149,7 @@ function isKickoffPhaseKey(phase: EventPhase) {
 
 export function CueTable({
   events,
+  activationDurationsById = {},
   phaseOptions = PHASES,
   kickoffTime = null,
   phaseMinuteAdjustments,
@@ -301,51 +320,109 @@ export function CueTable({
   const timedEvents = useMemo(
     () =>
       ordered
-        .map((event) => {
-          const seconds = parseTimecodeToSeconds(event.timecode);
-          return seconds === null ? null : { eventId: event.id, seconds };
+        .map((event, index) => {
+          const baseSeconds = parseTimecodeToSeconds(event.timecode);
+          if (baseSeconds === null) return null;
+          const driftMinutes = cumulativeDriftByPhaseKey.get(event.phase) ?? 0;
+          const seconds = baseSeconds + driftMinutes * 60;
+
+          const activationSeconds =
+            event.activationId && Number.isFinite(activationDurationsById[event.activationId])
+              ? Math.max(0, activationDurationsById[event.activationId] ?? 0)
+              : 0;
+
+          const nextEvent = ordered[index + 1];
+          const nextBaseSeconds = parseTimecodeToSeconds(nextEvent?.timecode ?? "");
+          const nextDriftMinutes = nextEvent
+            ? (cumulativeDriftByPhaseKey.get(nextEvent.phase) ?? 0)
+            : 0;
+          const nextSeconds =
+            nextBaseSeconds === null ? null : nextBaseSeconds + nextDriftMinutes * 60;
+          const spanSeconds = Math.max(
+            1,
+            resolveRowSpanSeconds(seconds, nextSeconds, activationSeconds),
+          );
+          return { eventId: event.id, seconds, spanSeconds, endSeconds: seconds + spanSeconds };
         })
-        .filter((item): item is { eventId: string; seconds: number } => item !== null)
+        .filter(
+          (
+            item,
+          ): item is {
+            eventId: string;
+            seconds: number;
+            spanSeconds: number;
+            endSeconds: number;
+          } => item !== null,
+        )
         .sort((a, b) => a.seconds - b.seconds),
-    [ordered],
+    [activationDurationsById, cumulativeDriftByPhaseKey, ordered],
   );
 
   function computeTimelineMarker(body: HTMLElement, nowSeconds: number) {
     if (!timedEvents.length) return null;
 
-    const rowTopFor = (eventId: string) => {
+    const rowMetricsById = new Map<string, { top: number; height: number }>();
+    const bodyRect = body.getBoundingClientRect();
+
+    const rowMetricsFor = (eventId: string) => {
+      const cached = rowMetricsById.get(eventId);
+      if (cached) return cached;
       const row = body.querySelector(`tr[data-event-id="${eventId}"]`) as HTMLElement | null;
       if (!row) return null;
-      return row.offsetTop + row.offsetHeight / 2;
+      const rowRect = row.getBoundingClientRect();
+      const metrics = {
+        top: Math.max(0, rowRect.top - bodyRect.top + body.scrollTop),
+        height: Math.max(1, rowRect.height),
+      };
+      rowMetricsById.set(eventId, metrics);
+      return metrics;
     };
 
     const first = timedEvents[0];
     const last = timedEvents[timedEvents.length - 1];
 
     if (nowSeconds <= first.seconds) {
-      const top = rowTopFor(first.eventId);
-      return top === null ? null : { contentTop: top, liveEventId: first.eventId };
+      const metrics = rowMetricsFor(first.eventId);
+      return metrics === null ? null : { contentTop: metrics.top, liveEventId: first.eventId };
     }
-    if (nowSeconds >= last.seconds) {
-      const top = rowTopFor(last.eventId);
-      return top === null ? null : { contentTop: top, liveEventId: last.eventId };
+    if (nowSeconds >= last.endSeconds) {
+      const metrics = rowMetricsFor(last.eventId);
+      return metrics === null
+        ? null
+        : { contentTop: metrics.top + metrics.height, liveEventId: last.eventId };
     }
 
-    let nextIndex = timedEvents.findIndex((item) => item.seconds >= nowSeconds);
-    if (nextIndex <= 0) nextIndex = 1;
-    const previous = timedEvents[nextIndex - 1];
-    const next = timedEvents[nextIndex];
-    const previousTop = rowTopFor(previous.eventId);
-    const nextTop = rowTopFor(next.eventId);
-    if (previousTop === null || nextTop === null) return null;
-    const span = Math.max(1, next.seconds - previous.seconds);
-    const ratio = (nowSeconds - previous.seconds) / span;
-    const contentTop = previousTop + (nextTop - previousTop) * ratio;
+    // Find active row by timecode: the last row with start <= now.
+    let left = 0;
+    let right = timedEvents.length - 1;
+    let activeIndex = 0;
 
-    const previousDelta = Math.abs(nowSeconds - previous.seconds);
-    const nextDelta = Math.abs(next.seconds - nowSeconds);
-    const liveEventId = previousDelta <= nextDelta ? previous.eventId : next.eventId;
-    return { contentTop, liveEventId };
+    while (left <= right) {
+      const middle = (left + right) >> 1;
+      const middleStart = timedEvents[middle].seconds;
+      if (middleStart <= nowSeconds) {
+        activeIndex = middle;
+        left = middle + 1;
+      } else {
+        right = middle - 1;
+      }
+    }
+
+    const active = timedEvents[activeIndex];
+    const activeMetrics = rowMetricsFor(active.eventId);
+    if (!activeMetrics) return null;
+
+    // Move only inside active row with pixel/second progression.
+    // If we are in a gap after row end, hold on row bottom until next row starts.
+    const elapsedInRow = Math.max(0, nowSeconds - active.seconds);
+    const boundedElapsed = Math.min(elapsedInRow, active.spanSeconds);
+    const pixelPerSecond = activeMetrics.height / active.spanSeconds;
+    const contentTop = activeMetrics.top + boundedElapsed * pixelPerSecond;
+
+    return {
+      contentTop,
+      liveEventId: nowSeconds < active.endSeconds ? active.eventId : null,
+    };
   }
 
   function setActivePhaseVisual(nextActive: string | null) {
@@ -442,14 +519,14 @@ export function CueTable({
         const label = timeMarkerLabelRef.current;
         if (!line || !marker || !label) return;
         const nowDate = new Date();
-        label.textContent = formatClockMinutes(nowDate);
+        label.textContent = formatClockWithSeconds(nowDate);
         const nowSeconds = nowDate.getHours() * 3600 + nowDate.getMinutes() * 60 + nowDate.getSeconds();
 
         // Keep overdue styling in sync without triggering React rerenders.
         for (const item of timedEvents) {
           const row = body.querySelector(`tr[data-event-id="${item.eventId}"]`) as HTMLElement | null;
           if (!row) continue;
-          const shouldBeOverdue = item.seconds <= nowSeconds;
+          const shouldBeOverdue = nowSeconds > item.endSeconds;
           const isOverdue = row.classList.contains("row-overdue");
           if (shouldBeOverdue !== isOverdue) {
             row.classList.toggle("row-overdue", shouldBeOverdue);
@@ -468,7 +545,7 @@ export function CueTable({
           return;
         }
 
-        const markerTop = 42 + timelineMarker.contentTop - body.scrollTop;
+        const markerTop = body.offsetTop + timelineMarker.contentTop - body.scrollTop;
         const topPx = `${markerTop}px`;
         line.style.top = topPx;
         marker.style.top = topPx;
@@ -561,14 +638,6 @@ export function CueTable({
       if (rafId !== null) window.cancelAnimationFrame(rafId);
     };
   }, [ordered]);
-
-  function parseTimecodeToDate(timecode: string, referenceDate: Date) {
-    const seconds = parseTimecodeToSeconds(timecode);
-    if (seconds === null) return null;
-    const target = new Date(referenceDate);
-    target.setHours(Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), seconds % 60, 0);
-    return target;
-  }
 
   function statusVariant(status: string): "default" | "success" | "warning" | "danger" | "secondary" {
     if (status === "live" || status === "ready") return "success";
@@ -680,8 +749,10 @@ export function CueTable({
   }
 
   const totalPhaseWeight = phaseBlocks.reduce((sum, block) => sum + Math.max(block.events.length, 1), 0);
-  const nowLabel = formatClockMinutes(new Date());
+  const nowLabel = formatClockWithSeconds(new Date());
   const renderNow = new Date();
+  const renderNowSeconds =
+    renderNow.getHours() * 3600 + renderNow.getMinutes() * 60 + renderNow.getSeconds();
 
   return (
     <div
@@ -755,18 +826,41 @@ export function CueTable({
                 {phaseEvents.map((event) => {
                   const globalIndex = eventIndexById.get(event.id) ?? 0;
                   const next = ordered[globalIndex + 1];
-                  const target = parseTimecodeToDate(event.timecode, renderNow);
-                  const overdue = target ? target.getTime() <= renderNow.getTime() : true;
                   const currentSeconds = parseTimecodeToSeconds(event.timecode);
                   const nextSeconds = next ? parseTimecodeToSeconds(next.timecode) : null;
+                  const currentDriftMinutes = cumulativeDriftByPhaseKey.get(event.phase) ?? 0;
+                  const nextDriftMinutes = next ? (cumulativeDriftByPhaseKey.get(next.phase) ?? 0) : 0;
+                  const adjustedCurrentSeconds =
+                    currentSeconds === null ? null : currentSeconds + currentDriftMinutes * 60;
+                  const adjustedNextSeconds =
+                    nextSeconds === null ? null : nextSeconds + nextDriftMinutes * 60;
+                  const activationSeconds =
+                    event.activationId && Number.isFinite(activationDurationsById[event.activationId])
+                      ? Math.max(0, activationDurationsById[event.activationId] ?? 0)
+                      : 0;
+                  const effectiveSpan =
+                    adjustedCurrentSeconds !== null
+                      ? Math.max(
+                          1,
+                          resolveRowSpanSeconds(
+                            adjustedCurrentSeconds,
+                            adjustedNextSeconds,
+                            activationSeconds,
+                          ),
+                        )
+                      : 30;
+                  const rowEndSeconds =
+                    adjustedCurrentSeconds !== null ? adjustedCurrentSeconds + effectiveSpan : null;
+                  const overdue = rowEndSeconds !== null ? renderNowSeconds > rowEndSeconds : true;
                   const durationSeconds =
-                    currentSeconds !== null && nextSeconds !== null
-                      ? Math.max(nextSeconds - currentSeconds, 0)
+                    adjustedCurrentSeconds !== null && adjustedNextSeconds !== null
+                      ? Math.max(adjustedNextSeconds - adjustedCurrentSeconds, 0)
                       : null;
                   const timeToZeroSeconds =
-                    currentSeconds !== null && kickoffSeconds !== null
-                      ? Math.max(kickoffSeconds - currentSeconds, 0)
+                    adjustedCurrentSeconds !== null && kickoffSeconds !== null
+                      ? Math.max(kickoffSeconds - adjustedCurrentSeconds, 0)
                       : null;
+                  const adjustedTimecodeLabel = formatClockFromSeconds(adjustedCurrentSeconds);
                   const expanded = expandedRowId === event.id;
                   const canInsertAfter = Boolean(onInsertAfter);
                   const rowRuntimeStyle = event.groupColor
@@ -839,7 +933,7 @@ export function CueTable({
                                 </TableCell>
                               );
                             case "timecode":
-                              return <TableCell key={column.key}>{event.timecode}</TableCell>;
+                              return <TableCell key={column.key}>{adjustedTimecodeLabel}</TableCell>;
                             case "duration":
                               return (
                                 <TableCell key={column.key}>
