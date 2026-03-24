@@ -8,17 +8,20 @@ import { VenuesPage } from "./pages/VenuesPage";
 import { TeamsPage } from "./pages/TeamsPage";
 import { PersonnelPage } from "./pages/PersonnelPage";
 import { UsersPage } from "./pages/UsersPage";
-import { api, hasPrivilege, setApiUser, type Tournament, type UserAccount } from "./lib/api";
+import { api, hasPrivilege, setApiAuthToken, setApiUser, type Tournament, type UserAccount } from "./lib/api";
 import {
   TournamentWizardModal,
   emptyTournamentDraft,
   type TournamentDraft,
 } from "./components/TournamentWizardModal";
+import { Button } from "./components/ui/Button";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/Card";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import "./styles/globals.css";
 
 const LAST_TOURNAMENT_STORAGE_KEY = "lecuesheet:lastTournamentId";
 const LAST_CUESHEET_EVENT_STORAGE_KEY = "lecuesheet:lastCuesheetEventId";
+const AUTH_TOKEN_STORAGE_KEY = "lecuesheet:authToken";
 
 function normalizePathname(pathname: string) {
   if (!pathname || pathname === "/") return "/events";
@@ -52,6 +55,10 @@ function RouterShell() {
   const [deleteTournamentTarget, setDeleteTournamentTarget] = useState<Tournament | null>(null);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const [authResolved, setAuthResolved] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState("");
 
   useEffect(() => {
     const currentPath = normalizePathname(window.location.pathname);
@@ -84,30 +91,72 @@ function RouterShell() {
 
   useEffect(() => {
     let active = true;
-    setApiUser("super-admin");
-    api.getCurrentUser().then((user) => {
-      if (active) {
-        setCurrentUser(user);
-        setApiUser(user.id);
-        setAuthResolved(true);
+    const storedToken = (() => {
+      try {
+        return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim() ?? "";
+      } catch {
+        return "";
       }
-    }).catch(() => {
+    })();
+    if (!storedToken) {
       if (active) {
         setCurrentUser(null);
         setAuthResolved(true);
       }
-    });
-    api.getTournaments().then((rows) => {
-      if (active) setTournaments(rows);
-    }).catch(() => {
-      if (active) setTournaments([]);
-    });
+      return () => {
+        active = false;
+      };
+    }
+
+    setApiAuthToken(storedToken);
+    api
+      .getCurrentUser()
+      .then((user) => {
+        if (!active) return;
+        setCurrentUser(user);
+        setApiUser(user.id);
+        setAuthResolved(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setApiAuthToken("");
+        try {
+          window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+        } catch {
+          // Ignore storage failures.
+        }
+        setCurrentUser(null);
+        setAuthResolved(true);
+      });
+
     return () => {
       active = false;
     };
   }, []);
 
   useEffect(() => {
+    let active = true;
+    if (!currentUser) {
+      setTournaments([]);
+      return () => {
+        active = false;
+      };
+    }
+    api
+      .getTournaments()
+      .then((rows) => {
+        if (active) setTournaments(rows);
+      })
+      .catch(() => {
+        if (active) setTournaments([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
     if (!tournaments.length) return;
     const requested = new URLSearchParams(search).get("tournament") ?? "";
     const stored = (() => {
@@ -138,7 +187,34 @@ function RouterShell() {
       window.history.replaceState({}, "", `${pathname}${nextSearch}`);
       setSearch(nextSearch);
     }
-  }, [pathname, search, selectedTournamentId, tournaments]);
+  }, [currentUser, pathname, search, selectedTournamentId, tournaments]);
+
+  async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loginBusy) return;
+    setLoginBusy(true);
+    setLoginError("");
+    try {
+      const response = await api.login({
+        email: loginEmail.trim(),
+        password: loginPassword,
+      });
+      setApiAuthToken(response.token);
+      setApiUser(response.user.id);
+      try {
+        window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, response.token);
+      } catch {
+        // Ignore storage failures.
+      }
+      setCurrentUser(response.user);
+      setAuthResolved(true);
+      setLoginPassword("");
+    } catch {
+      setLoginError("Invalid credentials");
+    } finally {
+      setLoginBusy(false);
+    }
+  }
 
   function navigate(nextPath: string) {
     const url = new URL(nextPath, window.location.origin);
@@ -297,6 +373,7 @@ function RouterShell() {
   }, [currentUser]);
 
   useEffect(() => {
+    if (!currentUser) return;
     if (!authResolved) return;
     const allowedPath = pageAccess.events
       ? "/events"
@@ -319,7 +396,53 @@ function RouterShell() {
     if (routeBlocked) {
       navigate(allowedPath);
     }
-  }, [authResolved, pageAccess, pathname]);
+  }, [authResolved, currentUser, pageAccess, pathname]);
+
+  if (!authResolved) {
+    return <div className="page-shell" style={{ display: "grid", placeItems: "center" }}>Loading...</div>;
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="page-shell" style={{ display: "grid", placeItems: "center", minHeight: "100vh" }}>
+        <Card className="modal modal-confirm" style={{ width: "min(420px, 94vw)" }}>
+          <CardHeader>
+            <CardTitle>Sign In</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form className="modal-grid" onSubmit={submitLogin}>
+              <label className="field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  autoComplete="username"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Password</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  required
+                />
+              </label>
+              {loginError ? <p className="error" style={{ margin: 0 }}>{loginError}</p> : null}
+              <div className="modal-actions">
+                <Button type="submit" disabled={loginBusy}>
+                  <span>{loginBusy ? "Signing in..." : "Sign In"}</span>
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (route.type === "cuesheet") {
     return (

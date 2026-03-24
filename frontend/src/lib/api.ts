@@ -98,6 +98,7 @@ export type Activation = {
   mimeType?: string | null;
   sizeBytes?: number | null;
   durationMs?: number | null;
+  timeTo0Seconds?: number | null;
   tags: string[];
   createdAt: string;
   updatedAt: string;
@@ -337,15 +338,24 @@ async function parseResponse<T>(responsePromise: Promise<Response>): Promise<T> 
   return response.json() as Promise<T>;
 }
 
-let currentUserId = "super-admin";
+let currentUserId = "";
+let currentAuthToken = "";
 
 export function setApiUser(userId: string) {
-  currentUserId = userId?.trim() || "super-admin";
+  currentUserId = userId?.trim() || "";
+}
+
+export function setApiAuthToken(token: string | null | undefined) {
+  currentAuthToken = token?.trim() || "";
 }
 
 function authedFetch(input: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers ?? {});
-  headers.set("x-user-id", currentUserId);
+  if (currentAuthToken) {
+    headers.set("authorization", `Bearer ${currentAuthToken}`);
+  } else if (currentUserId) {
+    headers.set("x-user-id", currentUserId);
+  }
   return fetch(input, { ...init, headers });
 }
 
@@ -426,6 +436,14 @@ function draftToMatchPatch(draft: MatchInfoDraft): MatchInfo {
 }
 
 export const api = {
+  login: (payload: { email: string; password: string }) =>
+    parseResponse<{ token: string; user: UserAccount }>(
+      fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    ),
   getTournaments: () => parseResponse<Tournament[]>(authedFetch("/api/tournaments")),
   createTournament: (payload: {
     name: string;
@@ -487,6 +505,7 @@ export const api = {
     mimeType?: string;
     sizeBytes?: number;
     durationMs?: number;
+    timeTo0Seconds?: number;
     tags?: string[];
   }) =>
     parseResponse<Activation>(
@@ -504,6 +523,7 @@ export const api = {
       mimeType?: string | null;
       sizeBytes?: number | null;
       durationMs?: number | null;
+      timeTo0Seconds?: number | null;
       tags?: string[];
     },
   ) =>

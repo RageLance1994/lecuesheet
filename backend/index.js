@@ -52,6 +52,7 @@ import {
 } from "./src/store.js";
 import { parseCueSheetFromWorkbook, findDefaultWorkbook } from "./src/xlsx.js";
 import { parseFinancePdfWithAgent } from "./src/personnelFinanceAgent.js";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -186,11 +187,23 @@ const activationSchema = z
     mimeType: z.string().optional(),
     sizeBytes: z.number().optional(),
     durationMs: z.number().optional(),
+    timeTo0Seconds: z.number().optional(),
     tags: z.array(z.string()).optional(),
   })
   .strict();
 
-const activationPatchSchema = activationSchema.partial();
+const activationPatchSchema = z
+  .object({
+    name: z.string().optional(),
+    tournamentId: z.string().optional(),
+    fileName: z.union([z.string(), z.null()]).optional(),
+    mimeType: z.union([z.string(), z.null()]).optional(),
+    sizeBytes: z.union([z.number(), z.null()]).optional(),
+    durationMs: z.union([z.number(), z.null()]).optional(),
+    timeTo0Seconds: z.union([z.number(), z.null()]).optional(),
+    tags: z.array(z.string()).optional(),
+  })
+  .strict();
 
 const teamPlayerSchema = z
   .object({
@@ -335,6 +348,19 @@ const personnelSchema = z
   .strict();
 
 const personnelPatchSchema = personnelSchema.partial();
+const loginSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(1),
+  })
+  .strict();
+
+const AUTH_TOKEN_SECRET =
+  process.env.AUTH_TOKEN_SECRET || process.env.SESSION_SECRET || "change-this-auth-token-secret";
+const AUTH_TOKEN_TTL_SECONDS = Math.max(
+  300,
+  Number.parseInt(process.env.AUTH_TOKEN_TTL_SECONDS || "43200", 10) || 43200,
+);
 
 function hasPrivilege(user, page, action) {
   if (!user) return false;
@@ -343,15 +369,23 @@ function hasPrivilege(user, page, action) {
 }
 
 async function resolveRequestUser(req) {
-  const requestedUserId = req.header("x-user-id")?.trim() || "super-admin";
-  const user = await getUserById(requestedUserId);
-  if (user) return user;
-  return getUserById("super-admin");
+  const authHeader = req.header("authorization")?.trim() ?? "";
+  const match = /^Bearer\s+(.+)$/i.exec(authHeader);
+  const token = match?.[1]?.trim() ?? "";
+  if (!token) return null;
+  const userId = verifyAuthToken(token);
+  if (!userId) return null;
+  const user = await getUserById(userId);
+  if (!user || !user.active) return null;
+  return user;
 }
 
 function withPrivilege(page, action, handler) {
   return async (req, res) => {
     const user = await resolveRequestUser(req);
+    if (!user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
     if (!hasPrivilege(user, page, action)) {
       return res.status(403).json({ error: "Forbidden" });
     }
@@ -362,11 +396,44 @@ function withPrivilege(page, action, handler) {
 function withSuperAdmin(handler) {
   return async (req, res) => {
     const user = await resolveRequestUser(req);
-    if (!user || user.role !== "super_admin") {
+    if (!user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    if (user.role !== "super_admin") {
       return res.status(403).json({ error: "Super admin required" });
     }
     return handler(req, res, user);
   };
+}
+
+function createAuthToken(userId) {
+  const payload = {
+    userId,
+    exp: Math.floor(Date.now() / 1000) + AUTH_TOKEN_TTL_SECONDS,
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = createHmac("sha256", AUTH_TOKEN_SECRET).update(encoded).digest("base64url");
+  return `${encoded}.${signature}`;
+}
+
+function verifyAuthToken(token) {
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [encoded, receivedSig] = parts;
+  if (!encoded || !receivedSig) return null;
+  const expectedSig = createHmac("sha256", AUTH_TOKEN_SECRET).update(encoded).digest("base64url");
+  const receivedBuffer = Buffer.from(receivedSig, "utf8");
+  const expectedBuffer = Buffer.from(expectedSig, "utf8");
+  if (receivedBuffer.length !== expectedBuffer.length) return null;
+  if (!timingSafeEqual(receivedBuffer, expectedBuffer)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (!payload?.userId || !payload?.exp) return null;
+    if (Number(payload.exp) < Math.floor(Date.now() / 1000)) return null;
+    return String(payload.userId);
+  } catch {
+    return null;
+  }
 }
 
 function actorFromRequest(req, user) {
@@ -453,6 +520,24 @@ async function tryBootstrapFromDefaultWorkbook() {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  const parsed = loginSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json(parsed.error.flatten());
+  }
+  const { email, password } = parsed.data;
+  const users = await listUsers();
+  const user =
+    users.find(
+      (item) => item.email.trim().toLowerCase() === email.trim().toLowerCase() && item.active,
+    ) ?? null;
+  if (!user || user.password !== password) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+  const token = createAuthToken(user.id);
+  return res.json({ token, user });
 });
 
 app.get("/api/current-user", async (req, res) => {

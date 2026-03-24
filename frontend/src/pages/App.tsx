@@ -24,6 +24,7 @@ import {
 
 const MATCH_INFO_COLLAPSE_STORAGE_KEY = "lecuesheet:matchInfoOpen";
 const LAST_CUESHEET_EVENT_STORAGE_KEY = "lecuesheet:lastCuesheetEventId";
+const PHASE_DRIFT_DEBOUNCE_MS = 280;
 
 type ConfirmState = {
   open: boolean;
@@ -222,6 +223,8 @@ export function App({
   const [undoStack, setUndoStack] = useState<CueEvent[][]>([]);
   const versionMenuRef = useRef<HTMLDivElement | null>(null);
   const tableMenuRef = useRef<HTMLDivElement | null>(null);
+  const pendingPhaseDriftRef = useRef<Record<string, number>>({});
+  const phaseDriftTimerRef = useRef<number | null>(null);
   const [visibleColumns, setVisibleColumns] = useState<Record<CueColumnKey, boolean>>({
     index: true,
     activation: true,
@@ -320,9 +323,24 @@ export function App({
 
   useEffect(() => {
     setSelectedTimelineEventId(null);
+    if (phaseDriftTimerRef.current !== null) {
+      window.clearTimeout(phaseDriftTimerRef.current);
+      phaseDriftTimerRef.current = null;
+    }
+    pendingPhaseDriftRef.current = {};
     setPhaseMinuteAdjustments({});
     setUndoStack([]);
   }, [eventId]);
+
+  useEffect(
+    () => () => {
+      if (phaseDriftTimerRef.current !== null) {
+        window.clearTimeout(phaseDriftTimerRef.current);
+        phaseDriftTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     try {
@@ -517,10 +535,31 @@ export function App({
   }));
 
   function adjustPhaseMinutes(phaseKey: string, deltaMinutes: number) {
-    setPhaseMinuteAdjustments((prev) => ({
-      ...prev,
-      [phaseKey]: (prev[phaseKey] ?? 0) + deltaMinutes,
-    }));
+    const pending = pendingPhaseDriftRef.current;
+    pending[phaseKey] = (pending[phaseKey] ?? 0) + deltaMinutes;
+
+    if (phaseDriftTimerRef.current !== null) {
+      window.clearTimeout(phaseDriftTimerRef.current);
+    }
+
+    phaseDriftTimerRef.current = window.setTimeout(() => {
+      const batch = pendingPhaseDriftRef.current;
+      pendingPhaseDriftRef.current = {};
+      phaseDriftTimerRef.current = null;
+
+      setPhaseMinuteAdjustments((prev) => {
+        const next = { ...prev };
+        for (const [key, delta] of Object.entries(batch)) {
+          const value = (next[key] ?? 0) + delta;
+          if (value === 0) {
+            delete next[key];
+          } else {
+            next[key] = value;
+          }
+        }
+        return next;
+      });
+    }, PHASE_DRIFT_DEBOUNCE_MS);
   }
 
   async function insertBlankRowAfter(row: CueEvent) {

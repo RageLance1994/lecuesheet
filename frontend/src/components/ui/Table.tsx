@@ -1,9 +1,11 @@
 import type {
+  ForwardedRef,
   HTMLAttributes,
   TableHTMLAttributes,
   ThHTMLAttributes,
   TdHTMLAttributes,
 } from "react";
+import { forwardRef } from "react";
 
 export function Table({ className = "", ...props }: TableHTMLAttributes<HTMLTableElement>) {
   return <table className={`ui-table ${className}`.trim()} {...props} />;
@@ -17,9 +19,12 @@ export function TableBody({ className = "", ...props }: HTMLAttributes<HTMLTable
   return <tbody className={`ui-table__body ${className}`.trim()} {...props} />;
 }
 
-export function TableRow({ className = "", ...props }: HTMLAttributes<HTMLTableRowElement>) {
-  return <tr className={`ui-table__row ${className}`.trim()} {...props} />;
-}
+export const TableRow = forwardRef(function TableRow(
+  { className = "", ...props }: HTMLAttributes<HTMLTableRowElement>,
+  ref: ForwardedRef<HTMLTableRowElement>,
+) {
+  return <tr ref={ref} className={`ui-table__row ${className}`.trim()} {...props} />;
+});
 
 export function TableHead({ className = "", ...props }: ThHTMLAttributes<HTMLTableHeaderCellElement>) {
   return <th className={`ui-table__th ${className}`.trim()} {...props} />;

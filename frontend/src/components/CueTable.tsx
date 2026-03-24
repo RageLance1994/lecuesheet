@@ -184,6 +184,9 @@ export function CueTable({
   const timeMarkerLabelRef = useRef<HTMLSpanElement | null>(null);
   const markerRafRef = useRef<number | null>(null);
   const liveRowIdRef = useRef<string | null>(null);
+  const rowRefsByIdRef = useRef<Map<string, HTMLTableRowElement>>(new Map());
+  const overdueCursorRef = useRef(0);
+  const lastOverdueNowRef = useRef<number | null>(null);
   const reloadAutoScrollDoneRef = useRef(false);
   const activePhaseKeyRef = useRef<string | null>(null);
   const phaseRailButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
@@ -358,24 +361,22 @@ export function CueTable({
     [activationDurationsById, cumulativeDriftByPhaseKey, ordered],
   );
 
+  const timedEventsByEnd = useMemo(
+    () => [...timedEvents].sort((a, b) => a.endSeconds - b.endSeconds),
+    [timedEvents],
+  );
+
   function computeTimelineMarker(body: HTMLElement, nowSeconds: number) {
     if (!timedEvents.length) return null;
-
-    const rowMetricsById = new Map<string, { top: number; height: number }>();
     const bodyRect = body.getBoundingClientRect();
-
     const rowMetricsFor = (eventId: string) => {
-      const cached = rowMetricsById.get(eventId);
-      if (cached) return cached;
-      const row = body.querySelector(`tr[data-event-id="${eventId}"]`) as HTMLElement | null;
+      const row = rowRefsByIdRef.current.get(eventId);
       if (!row) return null;
       const rowRect = row.getBoundingClientRect();
-      const metrics = {
+      return {
         top: Math.max(0, rowRect.top - bodyRect.top + body.scrollTop),
         height: Math.max(1, rowRect.height),
       };
-      rowMetricsById.set(eventId, metrics);
-      return metrics;
     };
 
     const first = timedEvents[0];
@@ -510,6 +511,32 @@ export function CueTable({
     const body = wrap.querySelector(".ui-table__body") as HTMLElement | null;
     if (!body) return;
 
+    const syncOverdueFromNow = (nowSeconds: number) => {
+      const previousNow = lastOverdueNowRef.current;
+      const shouldReset =
+        previousNow === null || nowSeconds < previousNow || overdueCursorRef.current > timedEventsByEnd.length;
+
+      if (shouldReset) {
+        overdueCursorRef.current = 0;
+        for (const item of timedEventsByEnd) {
+          const row = rowRefsByIdRef.current.get(item.eventId);
+          row?.classList.remove("row-overdue");
+        }
+      }
+
+      while (
+        overdueCursorRef.current < timedEventsByEnd.length &&
+        nowSeconds > timedEventsByEnd[overdueCursorRef.current].endSeconds
+      ) {
+        const due = timedEventsByEnd[overdueCursorRef.current];
+        const row = rowRefsByIdRef.current.get(due.eventId);
+        row?.classList.add("row-overdue");
+        overdueCursorRef.current += 1;
+      }
+
+      lastOverdueNowRef.current = nowSeconds;
+    };
+
     const updateTimeMarker = () => {
       if (markerRafRef.current !== null) return;
       markerRafRef.current = window.requestAnimationFrame(() => {
@@ -522,16 +549,7 @@ export function CueTable({
         label.textContent = formatClockWithSeconds(nowDate);
         const nowSeconds = nowDate.getHours() * 3600 + nowDate.getMinutes() * 60 + nowDate.getSeconds();
 
-        // Keep overdue styling in sync without triggering React rerenders.
-        for (const item of timedEvents) {
-          const row = body.querySelector(`tr[data-event-id="${item.eventId}"]`) as HTMLElement | null;
-          if (!row) continue;
-          const shouldBeOverdue = nowSeconds > item.endSeconds;
-          const isOverdue = row.classList.contains("row-overdue");
-          if (shouldBeOverdue !== isOverdue) {
-            row.classList.toggle("row-overdue", shouldBeOverdue);
-          }
-        }
+        syncOverdueFromNow(nowSeconds);
 
         const timelineMarker = computeTimelineMarker(body, nowSeconds);
         if (!timelineMarker) {
@@ -554,11 +572,11 @@ export function CueTable({
 
         if (timelineMarker.liveEventId !== liveRowIdRef.current) {
           if (liveRowIdRef.current) {
-            const previous = body.querySelector(`tr[data-event-id="${liveRowIdRef.current}"]`) as HTMLElement | null;
+            const previous = rowRefsByIdRef.current.get(liveRowIdRef.current) ?? null;
             previous?.classList.remove("row-live");
           }
           if (timelineMarker.liveEventId) {
-            const nextLive = body.querySelector(`tr[data-event-id="${timelineMarker.liveEventId}"]`) as HTMLElement | null;
+            const nextLive = rowRefsByIdRef.current.get(timelineMarker.liveEventId) ?? null;
             nextLive?.classList.add("row-live");
           }
           liveRowIdRef.current = timelineMarker.liveEventId;
@@ -579,12 +597,14 @@ export function CueTable({
         markerRafRef.current = null;
       }
       if (liveRowIdRef.current) {
-        const previous = body.querySelector(`tr[data-event-id="${liveRowIdRef.current}"]`) as HTMLElement | null;
+        const previous = rowRefsByIdRef.current.get(liveRowIdRef.current) ?? null;
         previous?.classList.remove("row-live");
         liveRowIdRef.current = null;
       }
+      overdueCursorRef.current = 0;
+      lastOverdueNowRef.current = null;
     };
-  }, [ordered, timedEvents]);
+  }, [ordered, timedEvents, timedEventsByEnd]);
 
   useEffect(() => {
     if (reloadAutoScrollDoneRef.current) return;
@@ -875,6 +895,13 @@ export function CueTable({
                       <TableRow
                         draggable
                         data-event-id={event.id}
+                        ref={(node) => {
+                          if (node) {
+                            rowRefsByIdRef.current.set(event.id, node);
+                          } else {
+                            rowRefsByIdRef.current.delete(event.id);
+                          }
+                        }}
                         style={rowRuntimeStyle}
                         className={`${overId === event.id ? "drag-over" : ""} ${overdue ? "row-overdue" : ""} ${flashEventId === event.id ? "row-focused" : ""} ${selectedRowIds.includes(event.id) ? "row-selected" : ""}`}
                         onClick={(e) => handleRowSelectionClick(e, event.id)}

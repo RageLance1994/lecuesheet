@@ -326,6 +326,9 @@ function normalizeActivation(activation) {
     mimeType: sanitizeOptionalText(source.mimeType),
     sizeBytes: Number.isFinite(Number(source.sizeBytes)) ? Number(source.sizeBytes) : null,
     durationMs: Number.isFinite(Number(source.durationMs)) ? Number(source.durationMs) : null,
+    timeTo0Seconds: Number.isFinite(Number(source.timeTo0Seconds))
+      ? Math.max(0, Math.round(Number(source.timeTo0Seconds)))
+      : null,
     tags,
     createdAt: source.createdAt || nowIso(),
     updatedAt: source.updatedAt || nowIso(),

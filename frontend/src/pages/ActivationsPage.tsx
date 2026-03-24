@@ -28,6 +28,7 @@ type ActivationSpecs = {
   mimeType: string | null;
   sizeBytes: number | null;
   durationMs: number | null;
+  timeTo0Seconds: number | null;
 };
 
 type WizardItem = ActivationSpecs & {
@@ -53,6 +54,7 @@ const EMPTY_SPECS: ActivationSpecs = {
   mimeType: null,
   sizeBytes: null,
   durationMs: null,
+  timeTo0Seconds: null,
 };
 
 const MEDIA_EXTENSIONS = new Set([
@@ -119,6 +121,46 @@ function formatDuration(durationMs?: number | null) {
   return `${Math.round(durationMs / 1000)}s`;
 }
 
+function formatMmSs(seconds?: number | null) {
+  if (!Number.isFinite(seconds) || (seconds ?? 0) < 0) return "";
+  const total = Math.max(0, Math.round(seconds ?? 0));
+  const mm = String(Math.floor(total / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function formatHhMmSs(seconds?: number | null) {
+  if (!Number.isFinite(seconds) || (seconds ?? 0) < 0) return "";
+  const total = Math.max(0, Math.round(seconds ?? 0));
+  const hh = String(Math.floor(total / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function parseMmSs(value: string): number | null {
+  const text = value.trim();
+  if (!text) return null;
+  const match = /^(\d+):([0-5]\d)$/.exec(text);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  const seconds = Number(match[2]);
+  if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+  return minutes * 60 + seconds;
+}
+
+function parseHhMmSs(value: string): number | null {
+  const text = value.trim();
+  if (!text) return null;
+  const match = /^(\d+):([0-5]\d):([0-5]\d)$/.exec(text);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 function dedupeFiles(files: File[]) {
   const seen = new Set<string>();
   const out: File[] = [];
@@ -149,6 +191,7 @@ function wizardItemFromActivation(activation: Activation): WizardItem {
     mimeType: activation.mimeType ?? null,
     sizeBytes: activation.sizeBytes ?? null,
     durationMs: activation.durationMs ?? null,
+    timeTo0Seconds: activation.timeTo0Seconds ?? null,
   };
 }
 
@@ -191,6 +234,7 @@ async function extractFileSpecs(file: File): Promise<ActivationSpecs> {
     mimeType: file.type || inferMimeTypeFromName(file.name),
     sizeBytes: Number.isFinite(file.size) ? file.size : null,
     durationMs: await extractDurationMs(file),
+    timeTo0Seconds: null,
   };
 }
 
@@ -268,11 +312,19 @@ export function ActivationsPage({
   const [wizardItems, setWizardItems] = useState<WizardItem[]>([createEmptyWizardItem()]);
   const [wizardIndex, setWizardIndex] = useState(0);
   const [tagInput, setTagInput] = useState("");
+  const [durationInput, setDurationInput] = useState("");
+  const [timeTo0Input, setTimeTo0Input] = useState("");
   const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
   const [groupedView, setGroupedView] = useState(true);
   const [openGroups, setOpenGroups] = useState<string[]>([]);
 
   const currentWizardItem = wizardItems[wizardIndex] ?? null;
+
+  useEffect(() => {
+    if (!wizardOpen) return;
+    setDurationInput(formatMmSs(currentWizardItem?.durationMs ? Math.round(currentWizardItem.durationMs / 1000) : null));
+    setTimeTo0Input(formatHhMmSs(currentWizardItem?.timeTo0Seconds ?? null));
+  }, [currentWizardItem?.durationMs, currentWizardItem?.timeTo0Seconds, wizardIndex, wizardOpen]);
 
   async function loadActivations() {
     setError("");
@@ -296,7 +348,27 @@ export function ActivationsPage({
     setWizardItems([createEmptyWizardItem()]);
     setWizardIndex(0);
     setTagInput("");
+    setDurationInput("");
+    setTimeTo0Input("");
     setConfirmCloseOpen(false);
+  }
+
+  function commitDurationInput(raw: string) {
+    const parsedSeconds = parseMmSs(raw);
+    setCurrentWizardItem((item) => ({
+      ...item,
+      durationMs: parsedSeconds === null ? null : parsedSeconds * 1000,
+    }));
+    setDurationInput(formatMmSs(parsedSeconds));
+  }
+
+  function commitTimeTo0Input(raw: string) {
+    const parsedSeconds = parseHhMmSs(raw);
+    setCurrentWizardItem((item) => ({
+      ...item,
+      timeTo0Seconds: parsedSeconds,
+    }));
+    setTimeTo0Input(formatHhMmSs(parsedSeconds));
   }
 
   function setCurrentWizardItem(updater: (item: WizardItem) => WizardItem) {
@@ -374,8 +446,21 @@ export function ActivationsPage({
     setBusy(true);
     setError("");
     try {
+      const normalizedWizardItems = wizardItems.map((item, index) => {
+        if (index !== wizardIndex) return item;
+        const parsedDuration = parseMmSs(durationInput);
+        const parsedTimeTo0 = parseHhMmSs(timeTo0Input);
+        return {
+          ...item,
+          durationMs: parsedDuration === null ? null : parsedDuration * 1000,
+          timeTo0Seconds: parsedTimeTo0,
+        };
+      });
+
+      setWizardItems(normalizedWizardItems);
+
       if (editingActivationId) {
-        const item = wizardItems[0];
+        const item = normalizedWizardItems[0];
         if (!item || !item.name.trim()) {
           setBusy(false);
           return;
@@ -387,9 +472,10 @@ export function ActivationsPage({
           mimeType: item.mimeType,
           sizeBytes: item.sizeBytes,
           durationMs: item.durationMs,
+          timeTo0Seconds: item.timeTo0Seconds,
         });
       } else {
-        const toCreate = wizardItems.filter((item) => item.name.trim());
+        const toCreate = normalizedWizardItems.filter((item) => item.name.trim());
         for (const item of toCreate) {
           await api.createActivation({
             name: item.name.trim(),
@@ -399,6 +485,7 @@ export function ActivationsPage({
             mimeType: item.mimeType ?? undefined,
             sizeBytes: item.sizeBytes ?? undefined,
             durationMs: item.durationMs ?? undefined,
+            timeTo0Seconds: item.timeTo0Seconds ?? undefined,
           });
         }
       }
@@ -444,14 +531,21 @@ export function ActivationsPage({
   const canSubmit = editingActivationId
     ? Boolean(currentWizardItem?.name.trim())
     : wizardItems.some((item) => item.name.trim());
+  const durationInputExpected = formatMmSs(
+    currentWizardItem?.durationMs ? Math.round(currentWizardItem.durationMs / 1000) : null,
+  );
+  const timeTo0InputExpected = formatHhMmSs(currentWizardItem?.timeTo0Seconds ?? null);
+  const hasPendingTimeInputDraft =
+    durationInput.trim() !== durationInputExpected || timeTo0Input.trim() !== timeTo0InputExpected;
   const hasUnsavedChanges = wizardItems.some((item) =>
     item.name.trim() ||
     item.tags.length > 0 ||
     item.fileName ||
     item.mimeType ||
     item.sizeBytes ||
-    item.durationMs,
-  );
+    item.durationMs ||
+    item.timeTo0Seconds,
+  ) || hasPendingTimeInputDraft;
 
   function requestCloseWizard() {
     if (busy) return;
@@ -700,6 +794,31 @@ export function ActivationsPage({
                   />
                 </label>
 
+                <div className="modal-grid">
+                  <label className="field">
+                    <span>Duration (MM:SS)</span>
+                    <input
+                      type="text"
+                      value={durationInput}
+                      onChange={(event) => setDurationInput(event.target.value)}
+                      onBlur={(event) => commitDurationInput(event.target.value)}
+                      placeholder="00:30"
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Time to 0 (HH:MM:SS)</span>
+                    <input
+                      type="text"
+                      value={timeTo0Input}
+                      onChange={(event) => setTimeTo0Input(event.target.value)}
+                      onBlur={(event) => commitTimeTo0Input(event.target.value)}
+                      placeholder="00:00:00"
+                      inputMode="numeric"
+                    />
+                  </label>
+                </div>
+
                 <div className="activation-tags">
                   <div className="activation-tags__list">
                     {(currentWizardItem?.tags ?? []).map((tag) => (
@@ -791,7 +910,17 @@ export function ActivationsPage({
                   </div>
                   <div>
                     <span>Duration</span>
-                    <strong>{formatDuration(currentWizardItem?.durationMs)}</strong>
+                    <strong>
+                      {formatMmSs(
+                        currentWizardItem?.durationMs
+                          ? Math.round(currentWizardItem.durationMs / 1000)
+                          : null,
+                      ) || "-"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Time to 0</span>
+                    <strong>{formatHhMmSs(currentWizardItem?.timeTo0Seconds ?? null) || "-"}</strong>
                   </div>
                 </div>
 

@@ -799,13 +799,14 @@ h3 {
 .table-actions-menu-wrap {
   position: relative;
   margin-left: auto;
+  z-index: 2147483647;
 }
 
 .table-actions-menu {
   position: absolute;
   right: 0;
   top: calc(100% + 8px);
-  z-index: 34;
+  z-index: 2147483647;
   width: 250px;
   max-height: 380px;
   overflow: auto;
@@ -1996,7 +1997,7 @@ h3 {
   background: rgba(8, 12, 20, 0.72);
   display: grid;
   place-items: center;
-  z-index: 100;
+  z-index: 2147483647;
   padding: 1rem;
 }
 
