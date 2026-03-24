@@ -15,7 +15,7 @@ import {
   type TournamentDraft,
 } from "./components/TournamentWizardModal";
 import { Button } from "./components/ui/Button";
-import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/Card";
+import { Card, CardContent } from "./components/ui/Card";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import "./styles/globals.css";
 
@@ -399,40 +399,44 @@ function RouterShell() {
   }, [authResolved, currentUser, pageAccess, pathname]);
 
   if (!authResolved) {
-    return <div className="page-shell" style={{ display: "grid", placeItems: "center" }}>Loading...</div>;
+    return <div className="auth-shell">Loading...</div>;
   }
 
   if (!currentUser) {
     return (
-      <div className="page-shell" style={{ display: "grid", placeItems: "center", minHeight: "100vh" }}>
-        <Card className="modal modal-confirm" style={{ width: "min(420px, 94vw)" }}>
-          <CardHeader>
-            <CardTitle>Sign In</CardTitle>
-          </CardHeader>
+      <div className="auth-shell">
+        <Card className="auth-card">
           <CardContent>
-            <form className="modal-grid" onSubmit={submitLogin}>
-              <label className="field">
+            <form className="auth-form" onSubmit={submitLogin}>
+              <div className="auth-logo-row">
+                <img className="auth-form-logo" src="/mock_liveengine%20logo.png" alt="Live Engine" />
+              </div>
+              <label className="field auth-field">
                 <span>Email</span>
                 <input
+                  className="auth-input"
                   type="email"
                   autoComplete="username"
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder="name@company.com"
                   required
                 />
               </label>
-              <label className="field">
+              <label className="field auth-field">
                 <span>Password</span>
                 <input
+                  className="auth-input"
                   type="password"
                   autoComplete="current-password"
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••••"
                   required
                 />
               </label>
               {loginError ? <p className="error" style={{ margin: 0 }}>{loginError}</p> : null}
-              <div className="modal-actions">
+              <div className="auth-actions">
                 <Button type="submit" disabled={loginBusy}>
                   <span>{loginBusy ? "Signing in..." : "Sign In"}</span>
                 </Button>
