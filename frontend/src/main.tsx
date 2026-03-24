@@ -69,6 +69,7 @@ function RouterShell() {
   const [busyTournament, setBusyTournament] = useState(false);
   const [deleteTournamentTarget, setDeleteTournamentTarget] = useState<Tournament | null>(null);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
+  const [authResolved, setAuthResolved] = useState(false);
 
   useEffect(() => {
     const currentPath = normalizePathname(window.location.pathname);
@@ -106,9 +107,13 @@ function RouterShell() {
       if (active) {
         setCurrentUser(user);
         setApiUser(user.id);
+        setAuthResolved(true);
       }
     }).catch(() => {
-      if (active) setCurrentUser(null);
+      if (active) {
+        setCurrentUser(null);
+        setAuthResolved(true);
+      }
     });
     api.getTournaments().then((rows) => {
       if (active) setTournaments(rows);
@@ -310,6 +315,7 @@ function RouterShell() {
   }, [currentUser]);
 
   useEffect(() => {
+    if (!authResolved) return;
     const allowedPath = pageAccess.events
       ? "/events"
       : pageAccess.activations
@@ -331,7 +337,7 @@ function RouterShell() {
     if (routeBlocked) {
       navigate(allowedPath);
     }
-  }, [pageAccess, pathname]);
+  }, [authResolved, pageAccess, pathname]);
 
   if (route.type === "cuesheet") {
     return (

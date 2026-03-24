@@ -90,6 +90,12 @@ function formatClock(totalSeconds: number) {
   return `${hh}:${mm}:${ss}`;
 }
 
+function formatClockMinutes(date: Date) {
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 function formatRelativeMinutes(totalMinutes: number) {
   const sign = totalMinutes >= 0 ? "+" : "";
   return `T${sign}${totalMinutes}m`;
@@ -98,6 +104,19 @@ function formatRelativeMinutes(totalMinutes: number) {
 function formatSignedMinutes(totalMinutes: number) {
   const sign = totalMinutes >= 0 ? "+" : "";
   return `${sign}${totalMinutes}m`;
+}
+
+function shortPhaseLabel(label: string) {
+  const words = label
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+  return words
+    .slice(0, 3)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
 }
 
 function isKickoffPhaseKey(phase: EventPhase) {
@@ -128,7 +147,6 @@ export function CueTable({
 }: Props) {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
-  const [now, setNow] = useState(() => new Date());
   const [flashEventId, setFlashEventId] = useState<string | null>(null);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
@@ -142,11 +160,14 @@ export function CueTable({
     Record<string, number>
   >({});
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+  const timeMarkerRef = useRef<HTMLDivElement | null>(null);
+  const timeLineRef = useRef<HTMLDivElement | null>(null);
+  const timeMarkerLabelRef = useRef<HTMLSpanElement | null>(null);
+  const markerRafRef = useRef<number | null>(null);
+  const liveRowIdRef = useRef<string | null>(null);
+  const reloadAutoScrollDoneRef = useRef(false);
+  const activePhaseKeyRef = useRef<string | null>(null);
+  const phaseRailButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   useEffect(() => {
     const validIds = new Set(events.map((event) => event.id));
@@ -277,6 +298,70 @@ export function CueTable({
     [ordered],
   );
 
+  const timedEvents = useMemo(
+    () =>
+      ordered
+        .map((event) => {
+          const seconds = parseTimecodeToSeconds(event.timecode);
+          return seconds === null ? null : { eventId: event.id, seconds };
+        })
+        .filter((item): item is { eventId: string; seconds: number } => item !== null)
+        .sort((a, b) => a.seconds - b.seconds),
+    [ordered],
+  );
+
+  function computeTimelineMarker(body: HTMLElement, nowSeconds: number) {
+    if (!timedEvents.length) return null;
+
+    const rowTopFor = (eventId: string) => {
+      const row = body.querySelector(`tr[data-event-id="${eventId}"]`) as HTMLElement | null;
+      if (!row) return null;
+      return row.offsetTop + row.offsetHeight / 2;
+    };
+
+    const first = timedEvents[0];
+    const last = timedEvents[timedEvents.length - 1];
+
+    if (nowSeconds <= first.seconds) {
+      const top = rowTopFor(first.eventId);
+      return top === null ? null : { contentTop: top, liveEventId: first.eventId };
+    }
+    if (nowSeconds >= last.seconds) {
+      const top = rowTopFor(last.eventId);
+      return top === null ? null : { contentTop: top, liveEventId: last.eventId };
+    }
+
+    let nextIndex = timedEvents.findIndex((item) => item.seconds >= nowSeconds);
+    if (nextIndex <= 0) nextIndex = 1;
+    const previous = timedEvents[nextIndex - 1];
+    const next = timedEvents[nextIndex];
+    const previousTop = rowTopFor(previous.eventId);
+    const nextTop = rowTopFor(next.eventId);
+    if (previousTop === null || nextTop === null) return null;
+    const span = Math.max(1, next.seconds - previous.seconds);
+    const ratio = (nowSeconds - previous.seconds) / span;
+    const contentTop = previousTop + (nextTop - previousTop) * ratio;
+
+    const previousDelta = Math.abs(nowSeconds - previous.seconds);
+    const nextDelta = Math.abs(next.seconds - nowSeconds);
+    const liveEventId = previousDelta <= nextDelta ? previous.eventId : next.eventId;
+    return { contentTop, liveEventId };
+  }
+
+  function setActivePhaseVisual(nextActive: string | null) {
+    if (nextActive === activePhaseKeyRef.current) return;
+    const previousKey = activePhaseKeyRef.current;
+    if (previousKey) {
+      const previousButton = phaseRailButtonRefs.current.get(previousKey);
+      previousButton?.classList.remove("is-active");
+    }
+    if (nextActive) {
+      const nextButton = phaseRailButtonRefs.current.get(nextActive);
+      nextButton?.classList.add("is-active");
+    }
+    activePhaseKeyRef.current = nextActive;
+  }
+
   useLayoutEffect(() => {
     const wrap = tableWrapRef.current;
     if (!wrap) return;
@@ -308,10 +393,179 @@ export function CueTable({
     return () => clearTimeout(t);
   }, [scrollToEventId]);
 
-  function parseTimecodeToDate(timecode: string) {
+  useEffect(() => {
+    const wrap = tableWrapRef.current;
+    if (!wrap) return;
+    const body = wrap.querySelector(".ui-table__body") as HTMLElement | null;
+    if (!body) return;
+
+    const updateActivePhase = () => {
+      const marker = body.scrollTop + body.clientHeight * 0.33;
+      let nextActive = phaseBlocks[0]?.phase.key ?? null;
+
+      for (const block of phaseBlocks) {
+        const node = body.querySelector(
+          `[data-phase-separator="${block.phase.key}"]`,
+        ) as HTMLElement | null;
+        if (!node) continue;
+        if (node.offsetTop <= marker) {
+          nextActive = block.phase.key;
+          continue;
+        }
+        break;
+      }
+
+      setActivePhaseVisual(nextActive);
+    };
+
+    updateActivePhase();
+    body.addEventListener("scroll", updateActivePhase, { passive: true });
+    window.addEventListener("resize", updateActivePhase);
+    return () => {
+      body.removeEventListener("scroll", updateActivePhase);
+      window.removeEventListener("resize", updateActivePhase);
+    };
+  }, [phaseBlocks]);
+
+  useEffect(() => {
+    const wrap = tableWrapRef.current;
+    if (!wrap) return;
+    const body = wrap.querySelector(".ui-table__body") as HTMLElement | null;
+    if (!body) return;
+
+    const updateTimeMarker = () => {
+      if (markerRafRef.current !== null) return;
+      markerRafRef.current = window.requestAnimationFrame(() => {
+        markerRafRef.current = null;
+        const line = timeLineRef.current;
+        const marker = timeMarkerRef.current;
+        const label = timeMarkerLabelRef.current;
+        if (!line || !marker || !label) return;
+        const nowDate = new Date();
+        label.textContent = formatClockMinutes(nowDate);
+        const nowSeconds = nowDate.getHours() * 3600 + nowDate.getMinutes() * 60 + nowDate.getSeconds();
+
+        // Keep overdue styling in sync without triggering React rerenders.
+        for (const item of timedEvents) {
+          const row = body.querySelector(`tr[data-event-id="${item.eventId}"]`) as HTMLElement | null;
+          if (!row) continue;
+          const shouldBeOverdue = item.seconds <= nowSeconds;
+          const isOverdue = row.classList.contains("row-overdue");
+          if (shouldBeOverdue !== isOverdue) {
+            row.classList.toggle("row-overdue", shouldBeOverdue);
+          }
+        }
+
+        const timelineMarker = computeTimelineMarker(body, nowSeconds);
+        if (!timelineMarker) {
+          line.style.opacity = "0";
+          marker.style.opacity = "0";
+          if (liveRowIdRef.current) {
+            const previous = body.querySelector(`tr[data-event-id="${liveRowIdRef.current}"]`) as HTMLElement | null;
+            previous?.classList.remove("row-live");
+            liveRowIdRef.current = null;
+          }
+          return;
+        }
+
+        const markerTop = 42 + timelineMarker.contentTop - body.scrollTop;
+        const topPx = `${markerTop}px`;
+        line.style.top = topPx;
+        marker.style.top = topPx;
+        line.style.opacity = "1";
+        marker.style.opacity = "1";
+
+        if (timelineMarker.liveEventId !== liveRowIdRef.current) {
+          if (liveRowIdRef.current) {
+            const previous = body.querySelector(`tr[data-event-id="${liveRowIdRef.current}"]`) as HTMLElement | null;
+            previous?.classList.remove("row-live");
+          }
+          if (timelineMarker.liveEventId) {
+            const nextLive = body.querySelector(`tr[data-event-id="${timelineMarker.liveEventId}"]`) as HTMLElement | null;
+            nextLive?.classList.add("row-live");
+          }
+          liveRowIdRef.current = timelineMarker.liveEventId;
+        }
+      });
+    };
+
+    updateTimeMarker();
+    const timer = window.setInterval(updateTimeMarker, 1000);
+    body.addEventListener("scroll", updateTimeMarker, { passive: true });
+    window.addEventListener("resize", updateTimeMarker);
+    return () => {
+      window.clearInterval(timer);
+      body.removeEventListener("scroll", updateTimeMarker);
+      window.removeEventListener("resize", updateTimeMarker);
+      if (markerRafRef.current !== null) {
+        window.cancelAnimationFrame(markerRafRef.current);
+        markerRafRef.current = null;
+      }
+      if (liveRowIdRef.current) {
+        const previous = body.querySelector(`tr[data-event-id="${liveRowIdRef.current}"]`) as HTMLElement | null;
+        previous?.classList.remove("row-live");
+        liveRowIdRef.current = null;
+      }
+    };
+  }, [ordered, timedEvents]);
+
+  useEffect(() => {
+    if (reloadAutoScrollDoneRef.current) return;
+    let isReload = false;
+    try {
+      const entries = window.performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+      isReload = entries[0]?.type === "reload";
+    } catch {
+      isReload = false;
+    }
+    if (!isReload) return;
+
+    const wrap = tableWrapRef.current;
+    const body = wrap?.querySelector(".ui-table__body") as HTMLElement | null;
+    if (!wrap || !body) return;
+
+    let rafId: number | null = null;
+    let attempts = 0;
+    const maxAttempts = 8;
+
+    const tryScrollToActiveRow = () => {
+    const nowDate = new Date();
+    const nowSeconds = nowDate.getHours() * 3600 + nowDate.getMinutes() * 60 + nowDate.getSeconds();
+    const timelineMarker = computeTimelineMarker(body, nowSeconds);
+    const activeEventId = timelineMarker?.liveEventId ?? null;
+      if (!activeEventId) return false;
+
+      const row = body.querySelector(`tr[data-event-id="${activeEventId}"]`) as HTMLElement | null;
+      if (!row) return false;
+
+      const targetTop = Math.max(0, row.offsetTop - body.clientHeight / 2 + row.offsetHeight / 2);
+      body.scrollTo({
+        top: targetTop,
+        behavior: "auto",
+      });
+      return true;
+    };
+
+    const tick = () => {
+      attempts += 1;
+      if (tryScrollToActiveRow() || attempts >= maxAttempts) {
+        reloadAutoScrollDoneRef.current = true;
+        return;
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+    };
+  }, [ordered]);
+
+  function parseTimecodeToDate(timecode: string, referenceDate: Date) {
     const seconds = parseTimecodeToSeconds(timecode);
     if (seconds === null) return null;
-    const target = new Date(now);
+    const target = new Date(referenceDate);
     target.setHours(Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), seconds % 60, 0);
     return target;
   }
@@ -412,6 +666,23 @@ export function CueTable({
 
   const rowStyle = { gridTemplateColumns: gridTemplate };
 
+  function jumpToPhase(phaseKey: string) {
+    const wrap = tableWrapRef.current;
+    if (!wrap) return;
+    const body = wrap.querySelector(".ui-table__body") as HTMLElement | null;
+    const node = body?.querySelector(`[data-phase-separator="${phaseKey}"]`) as HTMLElement | null;
+    if (!body || !node) return;
+    body.scrollTo({
+      top: Math.max(0, node.offsetTop - 8),
+      behavior: "smooth",
+    });
+    setActivePhaseVisual(phaseKey);
+  }
+
+  const totalPhaseWeight = phaseBlocks.reduce((sum, block) => sum + Math.max(block.events.length, 1), 0);
+  const nowLabel = formatClockMinutes(new Date());
+  const renderNow = new Date();
+
   return (
     <div
       className="table-wrap"
@@ -440,7 +711,11 @@ export function CueTable({
 
             return (
               <Fragment key={`phase-${phase.key}`}>
-                <TableRow className="phase-separator" style={rowStyle}>
+                <TableRow
+                  className="phase-separator"
+                  style={rowStyle}
+                  data-phase-separator={phase.key}
+                >
                   <TableCell colSpan={activeColumns.length}>
                     <div className="phase-separator__content">
                       <div className="phase-separator__summary">
@@ -480,18 +755,8 @@ export function CueTable({
                 {phaseEvents.map((event) => {
                   const globalIndex = eventIndexById.get(event.id) ?? 0;
                   const next = ordered[globalIndex + 1];
-                  const target = parseTimecodeToDate(event.timecode);
-                  const rawRemainingSeconds = target
-                    ? Math.floor((target.getTime() - now.getTime()) / 1000)
-                    : 0;
-                  const overdue = rawRemainingSeconds <= 0;
-                  const remainingSeconds = overdue ? 0 : rawRemainingSeconds;
-                  const countdownWindowSeconds = 2 * 60 * 60;
-                  const progress = overdue
-                    ? 0
-                    : Math.min(remainingSeconds, countdownWindowSeconds) / countdownWindowSeconds;
-                  const circumference = 2 * Math.PI * 19;
-                  const dashOffset = circumference * (1 - progress);
+                  const target = parseTimecodeToDate(event.timecode, renderNow);
+                  const overdue = target ? target.getTime() <= renderNow.getTime() : true;
                   const currentSeconds = parseTimecodeToSeconds(event.timecode);
                   const nextSeconds = next ? parseTimecodeToSeconds(next.timecode) : null;
                   const durationSeconds =
@@ -571,28 +836,6 @@ export function CueTable({
                                 <TableCell key={column.key} className="activation-cell">
                                   <div className="metro-track" aria-hidden />
                                   <div className="metro-node" />
-                                  <div className="countdown-circle-wrap">
-                                    <svg
-                                      className="countdown-circle"
-                                      viewBox="0 0 44 44"
-                                      role="img"
-                                      aria-label="Countdown"
-                                    >
-                                      <circle className="countdown-circle-bg" cx="22" cy="22" r="19" />
-                                      <circle
-                                        className={`countdown-circle-fg ${overdue ? "is-overdue" : ""}`}
-                                        cx="22"
-                                        cy="22"
-                                        r="19"
-                                        strokeDasharray={circumference}
-                                        strokeDashoffset={dashOffset}
-                                      />
-                                    </svg>
-                                    <span>{formatDuration(remainingSeconds)}</span>
-                                  </div>
-                                  <Badge variant={overdue ? "danger" : "secondary"}>
-                                    {overdue ? "overdue" : "scheduled"}
-                                  </Badge>
                                 </TableCell>
                               );
                             case "timecode":
@@ -731,6 +974,42 @@ export function CueTable({
           })}
         </TableBody>
       </Table>
+      <div className="phase-jump-hotspot" aria-hidden />
+      <div className="phase-jump-scrim" aria-hidden />
+      <div ref={timeLineRef} className="cue-time-line" aria-hidden />
+      <div ref={timeMarkerRef} className="cue-time-marker" aria-live="polite" title="Current time marker">
+        <i className="fa-solid fa-clock" aria-hidden />
+        <span ref={timeMarkerLabelRef}>{nowLabel}</span>
+      </div>
+      <div className="phase-jump-rail" aria-label="Phase quick navigation">
+        {phaseBlocks.map((block) => {
+          const weight = Math.max(block.events.length, 1);
+          return (
+            <button
+              key={`jump-${block.phase.key}`}
+              type="button"
+              className="phase-jump-rail__segment"
+              style={{ flexGrow: totalPhaseWeight > 0 ? weight : 1 }}
+              onClick={() => jumpToPhase(block.phase.key)}
+              title={block.phase.label}
+              aria-label={`Jump to ${block.phase.label}`}
+              ref={(node) => {
+                if (node) {
+                  phaseRailButtonRefs.current.set(block.phase.key, node);
+                  if (!activePhaseKeyRef.current && block === phaseBlocks[0]) {
+                    node.classList.add("is-active");
+                    activePhaseKeyRef.current = block.phase.key;
+                  }
+                  return;
+                }
+                phaseRailButtonRefs.current.delete(block.phase.key);
+              }}
+            >
+              <span>{shortPhaseLabel(block.phase.label)}</span>
+            </button>
+          );
+        })}
+      </div>
       {contextMenu ? (
         <div
           className="cue-context-menu"
